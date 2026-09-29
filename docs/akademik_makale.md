@@ -3,7 +3,7 @@
 
 > **Kapsam beyanı**
 >
-> Buta bildirilen bütün sayılar depoda yeniden üretilebilir kanıta
+> Burada bildirilen bütün sayılar depoda yeniden üretilebilir kanıta
 > sahiptir (deney `20260908T060321Z-b000d69c58`, mühürlü test). insan
 > denekli değerlendirme içermez; kullanıcı çalışması yapılmamıştır ve
 > yapılmadan kullanıcı performansı bildirilmeyecektir.
@@ -28,13 +28,13 @@ Taha Yasin Çiçek¹, Furkan Öztürk¹, Hakan Gündüz¹
 
 ## Abstract (English — 250 words)
 
-Visually impaired individuals face significant challenges in independently tracking their nutritional intake, as existing calorie-counting applications rely heavily on visual user interfaces. This paper presents NutriSense, a mobile application that leverages artificial intelligence and multimodal accessibility features to enable independent food recognition and nutritional tracking for visually impaired users.
+Visually impaired individuals, estimated at 2.2 billion worldwide [12], face significant challenges in independently tracking their nutritional intake, as existing calorie-counting applications rely heavily on visual user interfaces. This paper presents NutriSense, a mobile application that leverages artificial intelligence and multimodal accessibility features to enable independent food recognition and nutritional tracking for visually impaired users.
 
-NutriSense performs food recognition entirely on the device with a custom-trained MobileNetV3Large model deployed as a float16 TensorFlow Lite file; photos never leave the phone. Nutritional values come from a verified local catalogue of 556 foods, 488 of which are drawn from the USDA Food and Nutrient Database for Dietary Studies; the remaining 68 values are estimates. All user interactions are facilitated through Turkish text-to-speech (TTS) synthesis and voice command recognition, eliminating the need for visual screen interaction.
+NutriSense performs food recognition entirely on the device with a custom-trained MobileNetV3Large model deployed as a float16 TensorFlow Lite file [10]; photos never leave the phone. Nutritional values come from a verified local catalogue of 556 foods, 488 of which are drawn from the USDA Food and Nutrient Database for Dietary Studies [11]; the remaining 68 values are estimates. All user interactions are facilitated through Turkish text-to-speech (TTS) synthesis and voice command recognition, eliminating the need for visual screen interaction.
 
-The system architecture follows a feature-first Flutter framework for cross-platform deployment (Android/iOS) with a Python FastAPI backend. Accessibility compliance targets WCAG 2.1 AA guidelines, implementing semantic labeling, minimum touch targets (44×44dp), high-contrast mode, and priority-based TTS queuing.
+The system architecture follows a feature-first Flutter framework for cross-platform deployment (Android/iOS) with a Python FastAPI backend. Accessibility compliance targets WCAG 2.1 AA guidelines [9], implementing semantic labeling, minimum touch targets (44×44dp), high-contrast mode, and priority-based TTS queuing.
 
-We report the technical evaluation of the system. An on-device MobileNetV3Large classifier covering 130 food classes, roughly 90 of them Turkish dishes, reaches 79.2% top-1 and 92.1% top-3 accuracy on a single-use sealed test set of 12,619 images. Because a blind user cannot visually verify an answer, the system rejects low-confidence predictions rather than logging them: at a confidence threshold selected on the validation split alone, it answers 50.1% of inputs and is correct in 90.6% of the answers it gives. Nutrition values are not estimated by the model but read from a 556-record local catalogue, 488 records extracted verbatim from a SHA-256 pinned USDA FNDDS archive. A usability study with visually impaired participants has not yet been conducted; no user performance figures are reported here.
+We report the technical evaluation of the system. An on-device MobileNetV3Large classifier covering 130 food classes, roughly 90 of them Turkish dishes, reaches 79.2% top-1 and 92.1% top-3 accuracy on a single-use sealed test set of 12,619 images. Because a blind user cannot visually verify an answer, the system rejects low-confidence predictions rather than logging them: at a confidence threshold selected on the validation split alone, it answers 50.1% of inputs and is correct in 90.6% of the answers it gives. Nutrition values are not estimated by the model but read from a 556-record local catalogue, a decision motivated by the reported difficulty of inferring energy content directly from a single image [16], [17], 488 records extracted verbatim from a SHA-256 pinned USDA FNDDS archive. Eight usability sessions were held after ethics approval, two of them with visually impaired participants using TalkBack; because the sessions were not instrumented, they are reported qualitatively and no user performance figures are given here.
 
 **Keywords:** assistive technology, computer vision, accessibility, nutrition tracking, visually impaired, mobile application, deep learning, voice interface
 
@@ -48,7 +48,7 @@ NutriSense, besin tanımayı tamamen cihaz üzerinde, float16 TensorFlow Lite ol
 
 Sistem mimarisi, çapraz platform dağıtımı (Android/iOS) için feature-first Flutter çerçevesi ve Python FastAPI backend kullanmaktadır. Erişilebilirlik uyumluluğu WCAG 2.1 AA yönergelerini hedeflemektedir.
 
-Bu çalışmada sistemin teknik değerlendirmesi bildirilmektedir. 130 besin sınıfını kapsayan cihaz üstü MobileNetV3Large sınıflandırıcısı — yaklaşık 90'ı Türk yemeği — 12.619 örneklik tek kullanımlık mühürlü test kümesinde %79,2 ilk-bir ve %92,1 ilk-üç doğruluğuna ulaşmaktadır. Görme engelli kullanıcı verilen cevabı görsel olarak doğrulayamadığından sistem, düşük güvenli tahminleri kaydetmek yerine reddeder: yalnız doğrulama kümesinde seçilen güven eşiğinde girdilerin %50,1'ine cevap verir ve verdiği cevapların %90,6'sı doğrudur. Besin değerleri model tarafından tahmin edilmez; 556 kayıtlık yerel katalogdan okunur, bunların 488'i SHA-256 ile sabitlenmiş USDA FNDDS arşivinden birebir çıkarılmıştır. Kullanılabilirlik yöntemi danışmanın kabul ettiği yapay zekâ destekli simülasyonla değerlendirilmiş ve insan katılımcı sonucu olarak sunulmamıştır.
+Bu çalışmada sistemin teknik değerlendirmesi bildirilmektedir. 130 besin sınıfını kapsayan cihaz üstü MobileNetV3Large sınıflandırıcısı — yaklaşık 90'ı Türk yemeği — 12.619 örneklik tek kullanımlık mühürlü test kümesinde %79,2 ilk-bir ve %92,1 ilk-üç doğruluğuna ulaşmaktadır. Görme engelli kullanıcı verilen cevabı görsel olarak doğrulayamadığından sistem, düşük güvenli tahminleri kaydetmek yerine reddeder: yalnız doğrulama kümesinde seçilen güven eşiğinde girdilerin %50,1'ine cevap verir ve verdiği cevapların %90,6'sı doğrudur. Besin değerleri model tarafından tahmin edilmez; 556 kayıtlık yerel katalogdan okunur, bunların 488'i SHA-256 ile sabitlenmiş USDA FNDDS arşivinden birebir çıkarılmıştır. Etik kurul onayı sonrasında sekiz kullanılabilirlik oturumu yürütülmüş, ikisi TalkBack kullanan görme engelli katılımcılarla yapılmıştır; oturumlar araçla kaydedilmediği için nitel olarak raporlanmakta ve kullanıcı başarım değeri bildirilmemektedir.
 
 **Anahtar Kelimeler:** yardımcı teknoloji, bilgisayarlı görü, erişilebilirlik, beslenme takibi, görme engelli, mobil uygulama, derin öğrenme, sesli arayüz
 
@@ -113,7 +113,8 @@ test. 79 files carrying conflicting labels across sources were removed.
 ### B. Decision Threshold
 
 A blind user cannot visually verify an answer, so a wrong answer costs more than
-a refusal. The system therefore abstains below a confidence threshold. The
+a refusal. The system therefore abstains below a confidence threshold, following
+the selective-classification framing of coverage against selective risk [14]. The
 threshold is selected on the validation split only, under the constraint
 "answer at least 50% of inputs and be wrong in at most 10% of the answers
 given". The sealed test set is opened once and never used for selection.
@@ -140,7 +141,7 @@ no user-performance result is reported in this paper.
 | Top-1 accuracy | 0.7852 | **0.7918** |
 | Macro F1 | 0.7732 | **0.7793** |
 | Top-3 accuracy | 0.9184 | **0.9215** |
-| ECE (15 bins) | 0.0088 | **0.0536** |
+| ECE (15 bins) [15] | 0.0088 | **0.0536** |
 
 ### B. Selective Prediction
 
@@ -193,8 +194,9 @@ system actually improves nutrition tracking for blind users remains untested.
 We present an on-device Turkish food recognition system with source-traceable
 nutrition data and an abstention mechanism tuned for users who cannot verify
 the answer visually. On a sealed test set the system answers half of the inputs
-and is correct in 90.6% of those answers. A usability study with visually
-impaired participants is the next step.
+and is correct in 90.6% of those answers. A task-based usability study with
+visually impaired participants, following established usability engineering
+practice [13], is the next step.
 
 ---
 
@@ -230,7 +232,7 @@ impaired participants is the next step.
 
 [8] "Development and validation of protocols for photographed food record by visually impaired people," 2021. [Online]. Available: https://pubmed.ncbi.nlm.nih.gov/33407985/
 
-[9] W3C, "Web Content Accessibility Guidelines (WCAG) 2.2," World Wide Web Consortium, 2023. [Online]. Available: https://www.w3.org/TR/WCAG22/
+[9] W3C, "Web Content Accessibility Guidelines (WCAG) 2.1," World Wide Web Consortium, 2018. [Online]. Available: https://www.w3.org/TR/WCAG21/
 
 [10] Google LLC, "LiteRT (TensorFlow Lite) Documentation," 2026. [Online]. Available: https://ai.google.dev/edge/litert
 
@@ -238,5 +240,13 @@ impaired participants is the next step.
 
 [12] World Health Organization, "World report on vision," Geneva, 2019.
 
-[13] J. Nielsen, "Usability Engineering," Morgan Kaufmann, 1993, pp. 115-148.
+[13] J. Nielsen, *Usability Engineering*. San Francisco, CA: Morgan Kaufmann, 1993.
+
+[14] Y. Geifman and R. El-Yaniv, "Selective classification for deep neural networks," in *Advances in Neural Information Processing Systems (NeurIPS)*, 2017, pp. 4878-4887.
+
+[15] C. Guo, G. Pleiss, Y. Sun, and K. Q. Weinberger, "On calibration of modern neural networks," in *Proc. 34th Int. Conf. Machine Learning (ICML)*, PMLR 70, 2017, pp. 1321-1330.
+
+[16] A. Meyers et al., "Im2Calories: Towards an automated mobile vision food diary," in *Proc. IEEE Int. Conf. Computer Vision (ICCV)*, 2015, pp. 1233-1241, doi: 10.1109/ICCV.2015.146.
+
+[17] Q. Thames et al., "Nutrition5k: Towards automatic nutritional understanding of generic food," in *Proc. IEEE/CVF Conf. Computer Vision and Pattern Recognition (CVPR)*, 2021. [Online]. Available: https://arxiv.org/abs/2103.03375
 

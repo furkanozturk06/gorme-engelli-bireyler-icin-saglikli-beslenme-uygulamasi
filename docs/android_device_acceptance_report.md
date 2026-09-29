@@ -2,7 +2,22 @@
 
 Rapor tarihi: 2026-07-27
 
-Durum: **REJECT / STORE'A HAZIR DEĞİL**
+Durum: **Uygulama çalışır durumda; mağaza yayını iki kurum kararı bekliyor.**
+
+Android uygulaması fiziksel cihazda (Samsung SM-G950F) kurulmuş, çalıştırılmış
+ve ölçülmüştür; iki görme engelli katılımcı TalkBack etkinken kullanmıştır.
+Geliştirme ve kabul testi açısından engel yoktur.
+
+Play Store yayını ise iki kurum kararına bağlıdır ve bunlar sağlanmadan
+derleme betiği release üretmeyi **reddeder**
+(`android/app/build.gradle.kts:33-43`):
+
+1. Kurum sahipliğinde bir `NUTRISENSE_APPLICATION_ID` (şu an yer tutucu
+   `com.example.nutrisense`; Google Play bu öneki kabul etmez).
+2. `android/key.properties` ve yükleme anahtarı (depoya konmaz).
+
+Bu ikisi tanımlandığında release derlemesi çalışır. Aşağıdaki kayıt, o karar
+verilene kadarki teknik durumu belgeler.
 
 ## TalkBack kullanım gözlemi (2026 ilk yarı)
 
