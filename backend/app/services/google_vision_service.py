@@ -11,7 +11,15 @@ import asyncio
 import base64
 import logging
 
-from google.cloud import vision
+try:
+    # google-cloud-vision isteğe bağlı bir sağlayıcı bağımlılığıdır ve
+    # bağımlılık kilidinde yer almaz. Paket kurulu değilken bu modül yine de
+    # içe aktarılabilmelidir: aynı dosyadaki hata sınıfları Gemini sağlayıcısı
+    # ve testler tarafından kullanılır. Sağlayıcı yalnız paket varken açılır.
+    from google.cloud import vision
+except ImportError:  # pragma: no cover - ortamda pakete bağlı
+    vision = None
+
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ..config import get_settings
@@ -80,6 +88,15 @@ class GoogleVisionService:
         """Vision API istemcisini başlatır."""
         if settings.vision_provider_mode != "google":
             logger.info("Google Vision sağlayıcısı yapılandırma ile kapalı")
+            runtime_metrics.provider_outcome("google_vision", "disabled")
+            self._available = False
+            self.client = None
+            return
+        if vision is None:
+            logger.warning(
+                "google-cloud-vision paketi kurulu değil; Google Vision "
+                "sağlayıcısı kapalı kalıyor."
+            )
             runtime_metrics.provider_outcome("google_vision", "disabled")
             self._available = False
             self.client = None
