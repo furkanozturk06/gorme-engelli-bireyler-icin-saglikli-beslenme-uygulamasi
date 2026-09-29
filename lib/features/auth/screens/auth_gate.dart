@@ -1,0 +1,177 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../app.dart';
+import '../../../shared/widgets/accessible_button.dart';
+import '../../../shared/services/screen_voice_guide.dart';
+import '../state/auth_controller.dart';
+import '../../onboarding/screens/onboarding_screen.dart';
+import '../../dietitian/screens/dietitian_dashboard_screen.dart';
+import 'login_screen.dart';
+import 'privacy_consent_screen.dart';
+
+class AuthGate extends ConsumerWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+
+    // Ayarlar gibi ekranlar bu kapının üstüne push edilir. Oturum kapanınca
+    // altta giriş ekranı kurulsa da o sayfalar yığında kalır ve kullanıcı
+    // hiçbir şey olmamış gibi görür. Oturumdan çıkılan her durumda yığını
+    // köke indiriyoruz: elle çıkış, hesap silme ve oturum kilitlenmesi.
+    // Önceki duruma bakılmaz. Çıkış akışı authenticated'tan doğrudan
+    // unauthenticated'a geçmiyor, arada loading var; "önceki durum
+    // authenticated miydi" koşulu bu yüzden hiç tutmuyordu ve çıkıştan
+    // sonra Ayarlar ekranı yığında kalıp giriş ekranını gizliyordu.
+    // Oturum yokken kapının üstünde duran her ekran zaten kapatılmalı.
+    ref.listen<AuthState>(authControllerProvider, (previous, next) {
+      final leftSession = next.status == AuthStatus.unauthenticated ||
+          next.status == AuthStatus.locked;
+      if (!leftSession) return;
+
+      // Durum değişimi build sırasında geldiği için gezinme bir sonraki
+      // kareye bırakılır; build içinde Navigator çağırmak hata verir.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        final navigator = Navigator.of(context);
+        if (navigator.canPop()) {
+          navigator.popUntil((route) => route.isFirst);
+        }
+      });
+    });
+
+    Widget currentWidget;
+    String? rootGuideRoute;
+    var announceRootGuide = true;
+    switch (auth.status) {
+      case AuthStatus.authenticated:
+        currentWidget = auth.user?.accountType == 'dietitian'
+            ? const DietitianDashboardScreen()
+            : const _OnboardingGate();
+        if (auth.user?.accountType == 'dietitian') {
+          rootGuideRoute = VoiceGuideRoutes.dietitianDashboard;
+        }
+        break;
+      case AuthStatus.privacyNoticeRequired:
+        currentWidget = const PrivacyConsentScreen(requiredForEntry: true);
+        rootGuideRoute = VoiceGuideRoutes.privacy;
+        // Gizlilik ekranı metni kendi yaşam döngüsünde ayrıntılı okur.
+        announceRootGuide = false;
+        break;
+      case AuthStatus.unauthenticated:
+        currentWidget = const LoginScreen();
+        rootGuideRoute = VoiceGuideRoutes.login;
+        break;
+      case AuthStatus.locked:
+        currentWidget = Scaffold(
+          body: SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.lock_clock_outlined, size: 64),
+                    const SizedBox(height: 20),
+                    Semantics(
+                      liveRegion: true,
+                      child: Text(
+                        auth.message ?? 'Oturum kilitlendi.',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    AccessibleButton(
+                      label: 'Yeniden Giriş Yap',
+                      onPressed: () => ref
+                          .read(authControllerProvider.notifier)
+                          .unlockToLogin(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        rootGuideRoute = VoiceGuideRoutes.locked;
+        // Kilit mesajı canlı bölge olarak ayrıca duyurulur.
+        announceRootGuide = false;
+        break;
+      case AuthStatus.unknown:
+      case AuthStatus.loading:
+        currentWidget = Scaffold(
+          body: Center(
+            child: Semantics(
+              liveRegion: true,
+              label: 'Güvenli oturum doğrulanıyor',
+              child: const CircularProgressIndicator(),
+            ),
+          ),
+        );
+        break;
+    }
+
+    if (rootGuideRoute != null) {
+      currentWidget = RootScreenVoiceGuideOverlay(
+        routeName: rootGuideRoute,
+        announceOnOpen: announceRootGuide,
+        child: currentWidget,
+      );
+    }
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 300),
+      child: KeyedSubtree(
+        key: ValueKey(auth.status),
+        child: currentWidget,
+      ),
+    );
+  }
+}
+
+/// Onboarding tamamlanmamışsa onboarding ekranını göster
+class _OnboardingGate extends StatefulWidget {
+  const _OnboardingGate();
+
+  @override
+  State<_OnboardingGate> createState() => _OnboardingGateState();
+}
+
+class _OnboardingGateState extends State<_OnboardingGate> {
+  bool? _onboardingDone;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkOnboarding();
+  }
+
+  Future<void> _checkOnboarding() async {
+    final done = await isOnboardingComplete();
+    if (mounted) setState(() => _onboardingDone = done);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_onboardingDone == null) {
+      return Scaffold(
+        body: Center(
+          child: Semantics(
+            liveRegion: true,
+            label: 'Uygulama kurulumu kontrol ediliyor',
+            child: const CircularProgressIndicator(),
+          ),
+        ),
+      );
+    }
+    if (_onboardingDone == false) {
+      return OnboardingScreen(
+        onComplete: () => setState(() => _onboardingDone = true),
+      );
+    }
+    return const AppShell();
+  }
+}

@@ -1,0 +1,89 @@
+# ==============================================================================
+# NutriSense — Görme Engelli Bireyler İçin Kalori Takip Uygulaması
+# Flutter pubspec.yaml — Tüm proje bağımlılıkları
+# ==============================================================================
+
+name: nutrisense
+description: >
+  Görme engelli bireyler için yapay zeka destekli besin tanıma ve kalori
+  takip uygulaması. Kamera ile besin tanıma, sesli geri bildirim ve
+  diyetisyen entegrasyonu sunar.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # ---------- State Management ----------
+  flutter_riverpod: ^2.5.1
+
+  # ---------- Kamera & Görüntü ----------
+  camera: ^0.11.0+2
+  camera_android_camerax: 0.6.5
+  image: ^4.1.7
+
+  # ---------- Cihaz üstü model ----------
+  tflite_flutter: ^0.12.0
+
+  # ---------- Sesli Etkileşim ----------
+  flutter_tts: 4.0.2
+  speech_to_text: ^7.4.0
+
+  # ---------- Ağ & API ----------
+  dio: ^5.4.3+1
+
+  # ---------- Yerel Depolama ----------
+  shared_preferences: ^2.2.3
+  flutter_secure_storage: ^10.3.1
+
+  # ---------- İzinler ----------
+  permission_handler: ^11.3.1
+
+  # ---------- UI & Erişilebilirlik ----------
+  vibration: ^2.0.0
+
+  # Sallayarak sesli komut başlatma; mikrofonu sürekli açık tutmadan
+  # dokunmasız tetikleme sağlar.
+  sensors_plus: ^6.1.1
+  google_fonts: ^6.2.1
+
+  # ---------- Yardımcılar ----------
+  equatable: ^2.0.5
+  path_provider: ^2.1.3
+  device_info_plus: ^10.1.2
+  share_plus: ^12.0.2
+  url_launcher: ^6.3.2
+  uuid: ^4.4.0
+  image_picker: ^1.2.3
+  pedometer: 4.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/InterVariable.ttf
+        - asset: assets/fonts/InterVariable-Italic.ttf
+          style: italic
+
+  assets:
+    - assets/images/nutrition_scan_cover.png
+    - assets/models/nutrisense_food.tflite
+    - assets/models/labels.txt
+    - assets/models/model_manifest.json
+    # Plus Jakarta Sans uygulamayla gelir; google_fonts çalışırken indirmez.
+    - assets/google_fonts/

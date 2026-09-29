@@ -1,0 +1,214 @@
+"""Amaç bazlı ürün rızaları ve rızanın davranışı gerçekten kapatması."""
+
+import io
+
+from PIL import Image
+from auth_helpers import register_user
+
+PASSWORD = "Guvenli123"
+
+
+def _auth(tokens: dict) -> dict[str, str]:
+    return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+
+def _register(client, email: str) -> dict:
+    response = register_user(client, {
+        "email": email,
+        "password": PASSWORD,
+        "full_name": "Sentetik Kullanıcı",
+    })
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _jpeg_bytes() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 64), (120, 160, 90)).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def test_consents_start_empty(client):
+    """Rıza kaydı yoksa sessiz kabul edilmez."""
+    user = _register(client, "riza-bos@example.com")
+    response = client.get("/api/v1/consents", headers=_auth(user))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["health_data_processing"] is False
+    assert body["image_cross_border_transfer"] is False
+    assert body["privacy_notice_acknowledgement"] is False
+    assert body["consents"] == []
+
+
+def test_consent_can_be_granted_and_revoked(client):
+    user = _register(client, "riza-degisim@example.com")
+    headers = _auth(user)
+
+    granted = client.put("/api/v1/consents", headers=headers, json={
+        "consent_type": "image_cross_border_transfer",
+        "granted": True,
+    })
+    assert granted.status_code == 200, granted.text
+    assert granted.json()["image_cross_border_transfer"] is True
+    # Diğer amaç etkilenmemeli; rıza amaç bazlıdır.
+    assert granted.json()["health_data_processing"] is False
+
+    revoked = client.put("/api/v1/consents", headers=headers, json={
+        "consent_type": "image_cross_border_transfer",
+        "granted": False,
+    })
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["image_cross_border_transfer"] is False
+
+
+def test_privacy_notice_acknowledgement_is_versioned_and_recorded(client):
+    from app.models.database import ConsentRecord, SessionLocal
+
+    user = _register(client, "aydinlatma-kanit@example.com")
+    response = client.put(
+        "/api/v1/consents",
+        headers=_auth(user),
+        json={
+            "consent_type": "privacy_notice_acknowledgement",
+            "granted": True,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["privacy_notice_acknowledgement"] is True
+    with SessionLocal() as db:
+        record = db.query(ConsentRecord).filter_by(
+            user_id=user["user_id"],
+            consent_type="privacy_notice_acknowledgement",
+        ).one()
+        assert record.policy_version
+        assert record.granted_at is not None
+
+
+def test_old_notice_acknowledgement_does_not_open_current_gate(client):
+    from app.models.database import ConsentRecord, SessionLocal
+
+    user = _register(client, "eski-aydinlatma@example.com")
+    with SessionLocal() as db:
+        db.add(ConsentRecord(
+            user_id=user["user_id"],
+            consent_type="privacy_notice_acknowledgement",
+            policy_version="OLD-NOTICE",
+            granted=True,
+        ))
+        db.commit()
+    state = client.get("/api/v1/consents", headers=_auth(user))
+    assert state.status_code == 200
+    assert state.json()["privacy_notice_acknowledgement"] is False
+
+
+def test_revocation_keeps_the_earlier_record_as_evidence(client):
+    """Geri çekme kaydı silmez; ne zaman verilip alındığı kanıtlanabilmeli."""
+    from app.models.database import ConsentRecord, SessionLocal
+
+    user = _register(client, "riza-kanit@example.com")
+    headers = _auth(user)
+    client.put("/api/v1/consents", headers=headers, json={
+        "consent_type": "health_data_processing", "granted": True,
+    })
+    client.put("/api/v1/consents", headers=headers, json={
+        "consent_type": "health_data_processing", "granted": False,
+    })
+
+    db = SessionLocal()
+    try:
+        records = db.query(ConsentRecord).filter(
+            ConsentRecord.user_id == user["user_id"],
+            ConsentRecord.consent_type == "health_data_processing",
+        ).all()
+        assert len(records) == 2
+        assert {record.granted for record in records} == {True, False}
+        assert all(record.policy_version for record in records)
+    finally:
+        db.close()
+
+
+def test_unknown_consent_type_is_rejected(client):
+    user = _register(client, "riza-gecersiz@example.com")
+    response = client.put("/api/v1/consents", headers=_auth(user), json={
+        "consent_type": "pazarlama", "granted": True,
+    })
+    assert response.status_code == 422
+
+
+def test_consents_are_scoped_to_the_owner(client):
+    first = _register(client, "riza-sahip@example.com")
+    second = _register(client, "riza-baskasi@example.com")
+    client.put("/api/v1/consents", headers=_auth(first), json={
+        "consent_type": "image_cross_border_transfer", "granted": True,
+    })
+    other = client.get("/api/v1/consents", headers=_auth(second))
+    assert other.json()["image_cross_border_transfer"] is False
+
+
+def test_revocation_blocks_further_health_record_mutation_in_production(
+    client, monkeypatch
+):
+    """Geri çekme sonrası eski kaydı düzenleme/geri yükleme yolu da kapanır."""
+    from app.routers import food_router
+
+    monkeypatch.setattr(food_router.settings, "app_environment", "prod")
+    user = _register(client, "riza-isleme-durur@example.com")
+    headers = _auth(user)
+
+    update = client.patch(
+        "/api/v1/food-logs/11111111-1111-4111-8111-111111111111",
+        headers=headers,
+        json={"food_name_tr": "Elma"},
+    )
+    restore = client.post(
+        "/api/v1/food-logs/11111111-1111-4111-8111-111111111111/restore",
+        headers=headers,
+    )
+    assert update.status_code == 403, update.text
+    assert restore.status_code == 403, restore.text
+
+
+def test_analysis_is_blocked_without_cross_border_consent(client, monkeypatch):
+    """Yurt dışına aktaran sağlayıcıda rıza yoksa görüntü hiç işlenmez."""
+    from app.routers import food_router
+
+    calls = []
+
+    class RecordingVision:
+        cross_border = True
+
+        async def analyze_image(self, image_base64, **kwargs):
+            calls.append(image_base64)
+            raise AssertionError("rıza yokken sağlayıcı çağrılmamalı")
+
+    monkeypatch.setattr(food_router, "vision_service", RecordingVision())
+
+    user = _register(client, "analiz-rizasiz@example.com")
+    response = client.post(
+        "/api/v1/analyze-food",
+        headers=_auth(user),
+        files={"image": ("meal.jpg", _jpeg_bytes(), "image/jpeg")},
+        data={"capture_id": "11111111-1111-4111-8111-111111111111",
+              "meal_type": "ogle"},
+    )
+    assert response.status_code == 403, response.text
+    assert "yurt dışındaki sağlayıcıya" in response.json()["error"]["message"]
+    assert calls == [], "görüntü sağlayıcıya gönderilmiş"
+
+
+def test_analysis_without_server_provider_never_processes_the_photo(client, monkeypatch):
+    """Sunucuda sağlayıcı yokken görüntü işlenmez; tanıma telefonda yapılır."""
+    from app.routers import food_router
+
+    monkeypatch.setattr(food_router, "vision_service", None)
+
+    user = _register(client, "analiz-kapali@example.com")
+    response = client.post(
+        "/api/v1/analyze-food",
+        headers=_auth(user),
+        files={"image": ("meal.jpg", _jpeg_bytes(), "image/jpeg")},
+        data={"capture_id": "22222222-2222-4222-8222-222222222222",
+              "meal_type": "ogle"},
+    )
+    assert response.status_code == 503, response.text
+    assert "cihaz" in response.json()["error"]["message"]

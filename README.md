@@ -1,1 +1,193 @@
-# tubitakproje
+# NutriSense
+
+**Görme engelli bireyler için sesli beslenme takibi.**
+
+NutriSense; kamera veya galeriden besin tanıma, porsiyon ve kalori takibi, sesli komutlar ve diyetisyenle rapor paylaşımı sunan bir Flutter uygulamasıdır. Besin kayıtları kullanıcı onayından sonra oluşturulur.
+
+TÜBİTAK 2209-A kapsamında Kocaeli Üniversitesi'nde geliştirilmektedir.
+
+## Neler yapabilirsiniz?
+
+- Kamera veya galeriden fotoğraf seçerek besin tanıma.
+- Manuel besin girişi, porsiyon seçimi ve günlük kalori takibi.
+- Sesli komutlarla işlem yapma ve besin bilgilerini dinleme.
+- Sık tüketilen besinleri tekrar ekleme ve son işlemi geri alma.
+- Diyetisyenle eşleşme, rapor paylaşma ve yanıtları görüntüleme.
+- Telefonun hareket sensöründen otomatik adım sayımı; su, kilo, uyku ve ruh hâli kaydı.
+
+## Ekran görüntüleri
+
+| | | |
+|:--:|:--:|:--:|
+| <img src="screenshots/01-ana-ekran.png" width="230" alt="Ana ekran: hızlı tarama kartı, adım ve su sayaçları, günlük kalori hedefi"><br>**Ana ekran**<br>Kayıt kullanıcı onayından sonra oluşur | <img src="screenshots/02-tarama-sonucu.png" width="230" alt="Tarama sonucu: cihaz üstü model yemeği tanıdı ve kullanıcı onayı bekliyor"><br>**Cihaz üstü tanıma**<br>Model emin değilse tahmin kaydedilmez | <img src="screenshots/03-besin-arama.png" width="230" alt="Manuel besin girişi: katalogda arama ve 100 gram kalori değeri"><br>**Besin arama**<br>556 kayıtlık kaynaklı katalog |
+| <img src="screenshots/04-porsiyon-secimi.png" width="230" alt="Porsiyon seçimi: gram veya kase birimi ve miktar kaydırıcısı"><br>**Porsiyon seçimi**<br>Gram, adet, dilim, kase, ml, litre | <img src="screenshots/05-beslenme-gunlugu.png" width="230" alt="Beslenme günlüğü: kayıt listesi, kaynak etiketi ve günlük toplam kalori"><br>**Beslenme günlüğü**<br>Her kaydın kaynağı görünür | <img src="screenshots/06-saglik-takibi.png" width="230" alt="Sağlık ve aktivite: adım, ruh hâli, uyku, su ve ilaç takibi"><br>**Sağlık takibi**<br>Adım, uyku, su, ruh hâli |
+| <img src="screenshots/07-kesfet.png" width="230" alt="Keşfet: haftanın tarifi ve kahvaltılık, tatlı, çorba gibi kategoriler"><br>**Keşfet**<br>Tarif önerileri ve kategoriler | <img src="screenshots/08-diyetisyen.png" width="230" alt="Diyetisyen paneli: aktif bağlantı, haftalık rapor gönderme ve otomatik paylaşım anahtarı"><br>**Diyetisyen bağlantısı**<br>Karşılıklı onaylı eşleşme | <img src="screenshots/09-rapor-gonderme.png" width="230" alt="Rapor gönderme: dönem ve kanal seçimi, maskelenmiş iletişim bilgisi"><br>**Rapor gönderme**<br>İletişim bilgisi maskelenir |
+
+> Görüntüler Android emülatöründen alınmıştır. Emülatörde gerçek kamera
+> olmadığı için tarama ekranındaki arka plan sanal sahnedir; tanıma,
+> galeriden seçilen gerçek bir yemek fotoğrafıyla yapılmıştır.
+## Başlamadan önce
+
+Projenin iki parçası var: telefonda çalışan **Flutter uygulaması** ve bilgisayarda Docker ile çalışan **backend**. Hesap, besin değerleri ve kayıt işlemleri için backend açık olmalı.
+
+**Model depoda hazır gelir; uygulamayı kullanmak için eğitim yapmanız veya API anahtarı almanız gerekmez.**
+
+| Ortak araçlar | Android için ayrıca | iOS için ayrıca |
+|---|---|---|
+| Git, Flutter **3.41.4**, Python **3.11+**, Docker Desktop | Android Studio ve emülatör veya Android telefon | **Mac**, Xcode, CocoaPods ve simülatör veya iPhone |
+
+Docker Desktop'ı açın. Flutter kurulumunu `flutter doctor -v` ile kontrol edin.
+
+## 1. Projeyi indirin
+
+```sh
+git clone https://github.com/tahayasincicek/NutriSense.git
+cd NutriSense
+```
+
+Bundan sonraki komutları, aksi belirtilmedikçe **bu klasörde** çalıştırın.
+
+## 2. Backend'i hazırlayın
+
+Yerel ayar dosyasını oluşturun.
+
+**Windows:**
+
+```powershell
+py -3 scripts/dev_setup.py
+```
+
+**macOS / Linux:**
+
+```sh
+python3 scripts/dev_setup.py
+```
+
+Bu betik `backend/.env` dosyasını oluşturur ve gerekli parolaları üretir. Mevcut dosyanın üzerine yazmaz.
+
+Ardından servisleri başlatın ve mobil bağımlılıkları yükleyin:
+
+```sh
+docker compose -f backend/docker-compose.yml up -d --build --wait
+flutter pub get
+```
+
+İlk kurulum indirmeler nedeniyle zaman alabilir. Komut bitince [backend hazırlık kontrolünü](http://localhost:8000/health/ready) tarayıcıda açın. Sonra aşağıdan kendi platformunuzu seçin.
+
+## 3. Uygulamayı çalıştırın
+
+### Android emülatörü
+
+Android Studio'dan emülatörü açın:
+
+```sh
+flutter run --flavor dev --dart-define=APP_ENV=dev --dart-define=API_BASE_URL=http://10.0.2.2:8000/api/v1
+```
+
+### USB ile Android telefon
+
+Telefonda USB hata ayıklamayı açın, USB kablosuyla bağlayın ve telefondaki bağlantı iznini onaylayın. Tek cihaz bağlıyken:
+
+```sh
+adb reverse tcp:8000 tcp:8000
+flutter run --flavor dev --dart-define=APP_ENV=dev --dart-define=API_BASE_URL=http://127.0.0.1:8000/api/v1
+```
+
+### iOS simülatörü — yalnız Mac
+
+Önce yukarıdaki ortak kurulumu tamamlayın. Ardından:
+
+```sh
+cd ios
+pod install
+cd ..
+open -a Simulator
+flutter run --debug --dart-define=APP_ENV=dev --dart-define=API_BASE_URL=http://127.0.0.1:8000/api/v1
+```
+
+iOS komutlarında `--flavor dev` kullanmayın.
+
+**Gerçek iPhone için:** Xcode'da imzalama takımı seçilmeli ve API adresinde Mac'in yerel ağ IP'si kullanılmalı. [iPhone kurulum adımları](docs/developer_setup.md#3-ios).
+
+> iOS kaynak/CI derlemesi ve VoiceOver senaryo kabul listesi proje teslimi için tamamlandı. App Store imzası ve TestFlight, uygulamayı yayımlayacak Apple Developer hesabının dağıtım işlemidir. [Doğrulama kaydı](docs/erisebilirlik_cihaz_kabul_kaydi.md).
+
+Birden fazla cihaz bağlıysa `flutter devices` ile cihaz kimliğini bulun ve çalıştırma komutuna `-d CIHAZ_KIMLIGI` ekleyin.
+
+## 4. İlk denemenizi yapın
+
+1. Uygulamada **Hesap Aç** bölümünden kendi hesabınızı oluşturun. Hesap, e-postanıza gelen 8 haneli kodla açılır. Yerel kurulumda e-posta gerçek adrese gitmez; kodu [Mailpit](http://localhost:8025) üzerinden görürsünüz. Yeni kurulum boş veritabanıyla başlar.
+2. **Ayarlar → Cihaz Üstü Model** seçeneğini açın.
+3. Tarama ekranında **Galeriden fotoğraf seç** ile bir yemek fotoğrafı seçin. Gerçek telefonda kamerayı da kullanabilirsiniz.
+4. Tanınan besini ve porsiyonu kontrol edip onaylayın.
+5. Kaydınızı günlük ekranından görüntüleyin.
+
+Cihaz üstü model fotoğrafı telefonda analiz eder. Besin değerlerini alma ve kayıt işlemleri için backend bağlantısı gerekir.
+
+**E-posta ve SMS bu kurulumda test amaçlıdır.** Gerçek alıcılara gönderilmez: e-postalar Mailpit'te, SMS'ler backend'in yerel test kutusunda görüntülenir. Diyetisyen ve rapor testi için [geliştirici rehberine](docs/developer_setup.md) bakın.
+
+## Yararlı adresler
+
+Backend açıkken bilgisayarınızın tarayıcısından erişebilirsiniz:
+
+| Adres | Ne için? |
+|---|---|
+| [Hazırlık kontrolü](http://localhost:8000/health/ready) | Backend çalışıyor mu? |
+| [API dokümanı](http://localhost:8000/docs) | Sunucu uçlarını incelemek |
+| [Mailpit](http://localhost:8025) | Test e-postalarını görmek |
+
+## Sorun yaşarsanız
+
+| Sorun | İlk kontrol |
+|---|---|
+| Sunucuya bağlanılamıyor | Docker açık mı? Hazırlık kontrolü yanıt veriyor mu? Platformunuza uygun komutu kullandınız mı? |
+| Cihaz bulunamadı | Emülatörü/simülatörü açın veya USB bağlantısını kontrol edin; `flutter devices` çalıştırın. |
+| Android APK bulunamadı | Derleme komutuna `--flavor dev` ekleyin. |
+| iOS scheme/flavor hatası | Komuttan `--flavor dev` parametresini kaldırın. |
+| Fotoğraf tanınmadı | Daha net fotoğraf seçin veya manuel besin girişini kullanın. |
+
+SDK/NDK sürümleri, APK oluşturma, fiziksel cihaz bağlantısı ve güncelleme adımları: **[Ayrıntılı geliştirici rehberi](docs/developer_setup.md)**.
+
+## Geliştiriciler için
+
+| Klasör | İçerik |
+|---|---|
+| `lib/` | Flutter ekranları ve uygulama mantığı |
+| `backend/` | FastAPI sunucusu ve veritabanı işlemleri |
+| `assets/models/` | Hazır TFLite modeli ve etiketler |
+| `test/`, `integration_test/` | Mobil testler |
+| `ml/` | Model eğitimi ve değerlendirme |
+| `analysis/` | Araştırma analizleri |
+| `docs/` | Teknik belgeler ve rehberler |
+
+Mobil testleri:
+
+```sh
+flutter test
+```
+
+Backend testleri:
+
+```sh
+docker compose -f backend/docker-compose.yml --profile test run --rm test
+```
+
+Kendi dalınızda çalışıp pull request açın. `.env`, kişisel imzalama dosyaları ve kullanıcı verilerini Git'e eklemeyin.
+
+## Belgeler
+
+- [Gerçek e-posta ve SMS kurulumu](docs/gercek_eposta_sms_kurulumu.md)
+
+- [Android ve iOS geliştirici rehberi](docs/developer_setup.md)
+- [iOS devir notu](docs/ios_devir_notu.md)
+- [Kullanıcı el kitabı](docs/kullanici_el_kitabi.md)
+- [Besin değerlerinin kaynakları](docs/nutrition_data_methodology.md)
+- [Model kartı](ml/MODEL_CARD.md) · [Veri ve lisans bilgileri](ml/LICENSES.md)
+- [Android yayın rehberi](docs/android_release_runbook.md) · [iOS yayın rehberi](docs/ios_release_runbook.md)
+- [TÜBİTAK sonuç raporu](docs/tubitak_sonuc_raporu.md) · [Makale taslağı](docs/akademik_makale.md)
+- [Teslim kanıt matrisi](docs/teslim_kanit_matrisi.md) · [Yaygınlaştırma paketi](docs/yayginlastirma_paketi.md)
+- [Erişilebilirlik cihaz kabul kaydı](docs/erisebilirlik_cihaz_kabul_kaydi.md)
+- SMS dışındaki saha, VoiceOver ve yaygınlaştırma kanıtlarını hazırlamak ve denetlemek için `.\scripts\initialize_tubitak_evidence.ps1`, ardından `.\scripts\verify_tubitak_delivery.ps1`
+- [Akşam teslim tamamlama rehberi](docs/aksam_teslim_rehberi.md)
+- [22 doğrulanmış kaynaklı literatür taraması](docs/literatur_taramasi.md)
+
+Model eğitimindeki Food-101 ve Türk mutfağı veri kaynaklarının kullanım koşulları lisans belgesindedir. Besin kataloğu USDA FoodData Central verilerini ve tahmini olduğu belirtilen kayıtları içerir.

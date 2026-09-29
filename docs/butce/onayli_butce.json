@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "kaynak": "TÜBİTAK 2209-A Araştırma Önerisi Formu, Bölüm 5 'Bütçe Talep Çizelgesi' (s. 8)",
+  "ustunluk_notu": "Başvuru formunun kendi notuna göre TYBS başvuru ekranındaki rakamlarla bu tablo çelişirse TYBS verileri esastır. Sözleşme sonrası onaylı bütçe farklıysa bu dosya onaylı bütçeye göre güncellenmeli, güncelleme gerekçesi kaydedilmelidir.",
+  "para_birimi": "TRY",
+  "proje_donemi": {
+    "baslangic": null,
+    "bitis": null,
+    "aciklama": "Destek başlangıç tarihinden itibaren 10 ay. Bu iki alan doldurulmadan mutabakat betiği tarih kapısını çalıştırmaz; harcama tarihleri dönem dışı olsa bile yakalanamaz."
+  },
+  "kalemler": [
+    {
+      "kod": "sarf",
+      "ad": "Sarf Malzeme",
+      "planlanan_tutar_tl": 4500,
+      "gerekce": "Hızlı ve etkili veri işleme kapasitesi; model eğitimi ve derleme iş yükü.",
+      "alt_kalemler": [
+        {
+          "ad": "16 GB RAM bellek",
+          "adet": 1,
+          "birim_fiyat_tl": null,
+          "planlanan_tutar_tl": null
+        },
+        {
+          "ad": "1 TB SSD",
+          "adet": 1,
+          "birim_fiyat_tl": null,
+          "planlanan_tutar_tl": null
+        }
+      ],
+      "alt_kalem_notu": "Başvuru formu iki donanımı tek 4.500 TL satırında birlikte anıyor; birim dağılımı belirsizdir (denetim bulgusu BT-02). Onaylı bütçedeki birim fiyatlar girildiğinde alt kalem toplamı kalem toplamına eşit olmak zorundadır; mutabakat betiği bunu kontrol eder."
+    },
+    {
+      "kod": "makina_techizat",
+      "ad": "Makina/Teçhizat (Demirbaş)",
+      "planlanan_tutar_tl": 0,
+      "gerekce": "Başvuruda talep edilmedi.",
+      "alt_kalemler": []
+    },
+    {
+      "kod": "hizmet_alimi",
+      "ad": "Hizmet Alımı",
+      "planlanan_tutar_tl": 4500,
+      "gerekce": "Android ve iOS için uygulama geliştirme bedeli.",
+      "alt_kalemler": [],
+      "alt_kalem_notu": "Hizmet alımında teslim kriteri sözleşmede tanımlanmalıdır (denetim bulgusu BT-03): faturaya karşılık gelen Android ve iOS artefaktları teslim kaydında adlandırılmalıdır."
+    },
+    {
+      "kod": "ulasim",
+      "ad": "Ulaşım",
+      "planlanan_tutar_tl": 0,
+      "gerekce": "Başvuruda talep edilmedi.",
+      "alt_kalemler": []
+    }
+  ],
+  "toplam_tl": 9000
+}

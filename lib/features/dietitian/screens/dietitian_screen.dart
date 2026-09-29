@@ -1,0 +1,665 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/accessibility_utils.dart';
+import '../../../shared/models/auth_model.dart';
+import '../../../shared/services/accessibility_service.dart';
+import '../../../shared/services/api_service.dart';
+import '../../../shared/services/stt_service.dart';
+import '../../../shared/services/structured_voice_input.dart';
+import '../../../shared/services/screen_voice_guide.dart';
+import '../../../shared/widgets/accessible_button.dart';
+import 'send_report_wizard.dart';
+import '../models/shared_report_history.dart';
+import '../widgets/report_history_section.dart';
+
+class DietitianScreen extends ConsumerStatefulWidget {
+  const DietitianScreen({super.key});
+
+  @override
+  ConsumerState<DietitianScreen> createState() => _DietitianScreenState();
+}
+
+class _DietitianScreenState extends ConsumerState<DietitianScreen> {
+  final _email = TextEditingController();
+  late final AccessibilityService _accessibility;
+  late final SttService _stt;
+  DietitianAssignmentInfo? _assignment;
+  List<SharedReportHistoryItem> _history = const [];
+  bool _loading = true;
+  bool _busy = false;
+  bool _automaticShare = false;
+  bool _automaticLoaded = false;
+  bool _voiceListening = false;
+  String? _error;
+
+  ApiService get _api => ref.read(apiServiceProvider);
+
+  @override
+  void initState() {
+    super.initState();
+    _accessibility = ref.read(accessibilityServiceProvider);
+    _stt = ref.read(sttServiceProvider);
+    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _accessibility.speak(
+        'Diyetisyen paneli. Beslenme raporlarınızı bir uzmanla '
+        'paylaşabilirsiniz.',
+        priority: TtsPriority.high,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _stt.cancelListening();
+    _email.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final result = await _api.getDietitianAssignment();
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _assignment = result.data;
+      _error = result.isSuccess ? null : result.errorMessage;
+    });
+    if (result.data != null) {
+      await _loadHistory();
+      final automatic = await _api.getAutomaticFoodShare();
+      if (!mounted) return;
+      setState(() {
+        _automaticShare = automatic.data ?? false;
+        _automaticLoaded = automatic.isSuccess;
+        if (!automatic.isSuccess) _error = automatic.errorMessage;
+      });
+    }
+  }
+
+  /// İşlem sonucunu hem ekranda hem sesli bildirir.
+  ///
+  /// Önceden bu işlemler sessizce başarısız oluyordu: hata durumunda hiçbir
+  /// geri bildirim yoktu, ekran okuyucu kullanıcısı ne olduğunu anlayamazdı.
+  void _report({required bool success, required String message}) {
+    if (!mounted) return;
+    setState(() => _error = success ? null : message);
+    if (success) {
+      _accessibility.speak(message, priority: TtsPriority.high);
+      AccessibilityUtils.successHaptic();
+    } else {
+      _accessibility.speakError(message);
+      AccessibilityUtils.errorHaptic();
+    }
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _listenForDietitianVoice() async {
+    if (_busy || _voiceListening) return;
+    final assignment = _assignment;
+    final prompt = assignment == null
+        ? (_email.text.trim().isEmpty
+            ? 'Diyetisyen e-posta adresini söyleyin. Örneğin uzman nokta '
+                'beslenme et example nokta com.'
+            : 'Bağlantı isteğini göndermek için istek gönder deyin veya yeni '
+                'bir e-posta adresi söyleyin.')
+        : assignment.isApproved
+            ? 'Rapor sihirbazını açmak için rapor gönder deyin.'
+            : assignment.awaitingDietitian
+                ? 'Onayınız alındı. Diyetisyenin kabulü bekleniyor.'
+                : 'Bağlantıyı kabul etmek için bağlantıyı onayla deyin.';
+    await _accessibility.speak(prompt, priority: TtsPriority.high);
+    if (!mounted || (assignment?.awaitingDietitian ?? false)) return;
+
+    await _stt.startListening(
+      onListeningStarted: () {
+        if (mounted) setState(() => _voiceListening = true);
+      },
+      onListeningStopped: () {
+        if (mounted) setState(() => _voiceListening = false);
+      },
+      onError: (message) {
+        if (mounted) setState(() => _voiceListening = false);
+        _report(success: false, message: message);
+      },
+      onResult: (result) {
+        if (!result.isFinal) return;
+        if (mounted) setState(() => _voiceListening = false);
+        _applyDietitianVoice(result.text);
+      },
+    );
+  }
+
+  void _applyDietitianVoice(String spoken) {
+    final assignment = _assignment;
+    if (assignment == null) {
+      if (_email.text.trim().contains('@') &&
+          voiceContains(spoken, const [
+            'istek gonder',
+            'baglanti istegi gonder',
+            'onayla',
+          ])) {
+        _requestAssignment();
+        return;
+      }
+      final address = spokenEmailToAddress(spoken);
+      if (RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(address)) {
+        setState(() => _email.text = address);
+        _accessibility.speak(
+          'E-posta adresi $address olarak yazıldı. Kontrol edin. Göndermek '
+          'için mikrofon düğmesine basıp istek gönder deyin.',
+          priority: TtsPriority.high,
+        );
+        return;
+      }
+      _report(
+        success: false,
+        message:
+            'E-posta adresi anlaşılamadı. Nokta ve et diyerek tekrar söyleyin.',
+      );
+      return;
+    }
+
+    if (assignment.isApproved &&
+        voiceContains(spoken, const ['rapor gonder', 'raporu gonder'])) {
+      _sendReport();
+      return;
+    }
+    if (!assignment.isApproved &&
+        !assignment.awaitingDietitian &&
+        voiceContains(spoken, const [
+          'baglantiyi onayla',
+          'baglanti onayla',
+          'onayla',
+        ])) {
+      _approveAssignment();
+      return;
+    }
+    _report(
+        success: false, message: 'Sesli komut anlaşılamadı. Tekrar deneyin.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // AppShell extends its body behind the navigation bar. Preserve that
+    // inherited bottom inset even though this list supplies explicit padding.
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        title: const Text('Diyetisyen Paneli'),
+      ),
+      body: _loading
+          ? Center(
+              child: Semantics(
+                liveRegion: true,
+                label: 'Diyetisyen bağlantısı yükleniyor',
+                child: const CircularProgressIndicator(),
+              ),
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomInset),
+                children: [
+                  if (_error != null) _buildErrorCard(_error!),
+                  _buildHeader(),
+                  const SizedBox(height: 24),
+                  if (_assignment == null)
+                    _buildSetupCard()
+                  else
+                    _buildAssignmentCard(),
+                  if (_assignment != null) ...[
+                    const SizedBox(height: 32),
+                    _buildHistorySection(),
+                  ],
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _buildHeader() {
+    final theme = Theme.of(context);
+    return Semantics(
+      header: true,
+      container: true,
+      excludeSemantics: true,
+      label: 'Uzman desteği. Beslenme programını bir uzmanla paylaşarak '
+          'daha hızlı sonuç alabilirsin.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Uzman Desteği',
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          Text(
+            'Beslenme programını bir uzmanla paylaşarak daha hızlı sonuç alabilirsin.',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorCard(String message) => Semantics(
+        liveRegion: true,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppTheme.errorColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+            border:
+                Border.all(color: AppTheme.errorColor.withValues(alpha: 0.3)),
+          ),
+          child:
+              Text(message, style: const TextStyle(color: AppTheme.errorColor)),
+        ),
+      );
+
+  Widget _buildSetupCard() {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(24),
+      // Kart görünümü diğer sekmelerdeki kartlarla aynı: aynı yüzey rengi,
+      // aynı köşe yarıçapı, aynı ince kenarlık. Farklı bir kenarlık ve gölge
+      // kullanmak paneli uygulamanın dışında bir yer gibi gösteriyordu.
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+        border:
+            Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Ana eylemin simgesi, uygulamanın diğer birincil kartlarındaki
+          // gibi yeşil gradyanlı yuvarlak bir alan içinde durur.
+          Center(
+            child: Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(
+                  colors: [AppTheme.primaryColor, AppTheme.primaryDark],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.primaryColor.withValues(alpha: 0.3),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.person_search_rounded,
+                  size: 32, color: Colors.white),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text('Diyetisyen Atama',
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w800),
+              textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          Text(
+            'Diyetisyeninin e-posta adresini yazarak bağlantı isteği gönderebilirsin.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 24),
+          Semantics(
+            label: 'Diyetisyen e-posta adresi giriş alanı',
+            textField: true,
+            child: TextField(
+              key: const Key('dietitian_email'),
+              controller: _email,
+              enabled: !_busy,
+              keyboardType: TextInputType.emailAddress,
+              autofillHints: const [AutofillHints.email],
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _requestAssignment(),
+              decoration: const InputDecoration(
+                labelText: 'Diyetisyen e-postası',
+                hintText: 'diyetisyen@email.com',
+                prefixIcon: Icon(Icons.alternate_email_rounded),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          OutlinedButton.icon(
+            key: const Key('dietitian_voice_setup'),
+            onPressed:
+                _busy || _voiceListening ? null : _listenForDietitianVoice,
+            icon: Icon(
+                _voiceListening ? Icons.mic_rounded : Icons.mic_none_rounded),
+            label: Text(
+                _voiceListening ? 'Dinleniyor...' : 'E-postayı Sesle Söyle'),
+          ),
+          const SizedBox(height: 12),
+          AccessibleButton(
+            key: const Key('dietitian_request'),
+            label: _busy ? 'Gönderiliyor...' : 'İstek Gönder',
+            semanticLabel:
+                'Diyetisyeninize bağlantı isteği göndermek için basın',
+            isLoading: _busy,
+            onPressed: _busy ? null : _requestAssignment,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAssignmentCard() {
+    final theme = Theme.of(context);
+    final assignment = _assignment!;
+    final isApproved = assignment.isApproved;
+    // Bağ iki taraflı onayla kurulur. Hasta rızasını verdikten sonra durum
+    // hâlâ "pending" kalır; ekran bunu ayırt etmezse kullanıcı aynı düğmeyi
+    // tekrar görüp onayın işlemediğini sanıyordu.
+    final awaitingDietitian = assignment.awaitingDietitian;
+    final statusLabel = isApproved
+        ? 'Bağlantı Aktif'
+        : awaitingDietitian
+            ? 'Diyetisyen Onayı Bekleniyor'
+            : 'Onayınız Bekleniyor';
+    final statusSpoken = isApproved
+        ? 'Bağlantı aktif.'
+        : awaitingDietitian
+            ? 'Onayınız alındı, diyetisyenin kabulü bekleniyor.'
+            : 'Onayınız bekleniyor.';
+
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+        // Bağlantı aktifken yeşil vurgulu kenarlık, beklerken diğer
+        // kartlarla aynı nötr kenarlık kullanılır.
+        border: Border.all(
+            color: isApproved
+                ? AppTheme.primaryColor.withValues(alpha: 0.3)
+                : theme.colorScheme.outline.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        children: [
+          // Ad ve durum tek duyuru olarak okunur; baş harf avatarı
+          // ekran okuyucu için anlamsız olduğundan dışlanır.
+          Semantics(
+            container: true,
+            excludeSemantics: true,
+            label: 'Diyetisyeniniz ${assignment.dietitianName}. $statusSpoken',
+            child: Column(
+              children: [
+                CircleAvatar(
+                  radius: 35,
+                  backgroundColor:
+                      theme.colorScheme.primary.withValues(alpha: 0.1),
+                  child: Text(assignment.dietitianName[0],
+                      style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: theme.colorScheme.primary)),
+                ),
+                const SizedBox(height: 16),
+                Text(assignment.dietitianName,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleLarge),
+                const SizedBox(height: 4),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isApproved
+                        ? theme.colorScheme.primary.withValues(alpha: 0.1)
+                        : Colors.amber.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    statusLabel,
+                    style: TextStyle(
+                        color: isApproved
+                            ? theme.colorScheme.primary
+                            : Colors.amber[800],
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          if (!isApproved && awaitingDietitian)
+            // Hastanın yapacağı bir şey kalmadı; düğme yerine ne beklendiğini
+            // söyleyen bir açıklama gösterilir.
+            Semantics(
+              container: true,
+              label: 'Onayınız alındı. ${assignment.dietitianName} isteği '
+                  'kabul ettiğinde bağlantı kurulacak.',
+              child: Row(
+                children: [
+                  Icon(Icons.hourglass_top_rounded,
+                      size: 20, color: Colors.amber[800]),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Onayınız alındı. ${assignment.dietitianName} isteği '
+                      'kabul ettiğinde bağlantı kurulacak.',
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (!isApproved)
+            AccessibleButton(
+              key: const Key('dietitian_approve'),
+              label: 'Bağlantıyı Onayla',
+              semanticLabel:
+                  '${assignment.dietitianName} ile bağlantıyı onaylamak için basın',
+              isLoading: _busy,
+              onPressed: _busy ? null : _approveAssignment,
+            )
+          else
+            AccessibleButton(
+              key: const Key('dietitian_send_report'),
+              label: 'Haftalık Rapor Gönder',
+              semanticLabel: 'Haftalık beslenme raporunuzu '
+                  '${assignment.dietitianName} adlı diyetisyene göndermek için basın',
+              icon: Icons.send_rounded,
+              onPressed: _busy ? null : _sendReport,
+            ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            key: const Key('dietitian_voice_action'),
+            onPressed:
+                _busy || _voiceListening ? null : _listenForDietitianVoice,
+            icon: Icon(
+                _voiceListening ? Icons.mic_rounded : Icons.mic_none_rounded),
+            label: Text(_voiceListening ? 'Dinleniyor...' : 'Sesli Komut Ver'),
+          ),
+          const SizedBox(height: 12),
+          AccessibleButton(
+            key: const Key('dietitian_cancel'),
+            label: isApproved ? 'Atamayı Kaldır' : 'İsteği İptal Et',
+            semanticLabel: isApproved
+                ? 'Diyetisyen bağlantısını kaldırmak için basın. Onay istenir.'
+                : 'Bağlantı isteğini iptal etmek için basın. Onay istenir.',
+            type: AccessibleButtonType.text,
+            foregroundColor: AppTheme.errorColor,
+            onPressed: _busy ? null : _cancelAssignment,
+          ),
+          if (isApproved)
+            SwitchListTile(
+              key: const Key('automatic_food_share'),
+              title: const Text('Onay sonrası otomatik paylaşım'),
+              subtitle: const Text(
+                  'Onayladığınız her yeni besinin adı, miktarı, tarih-saati '
+                  've kalorisi atanmış diyetisyenin doğrulanmış e-posta ve '
+                  'telefonuna otomatik gönderilir.'),
+              value: _automaticShare,
+              onChanged: _busy || !_automaticLoaded ? null : _setAutomaticShare,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadHistory() async {
+    final result = await _api.getSharedReportHistory();
+    if (!mounted) return;
+    setState(() => _history = result.data ?? const []);
+  }
+
+  Future<void> _setAutomaticShare(bool enabled) async {
+    if (enabled) {
+      final approved = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Otomatik paylaşımı aç?'),
+          content: Text(
+              '${_assignment!.dietitianName} için bundan sonra onayladığınız '
+              'her yeni besinin adı, miktarı, tarih-saati ve kalorisi hem e-posta '
+              'hem SMS ile otomatik aktarılacak. Önceki kayıtlar gönderilmez. '
+              'E-posta/SMS sağlayıcıları alıcı iletişim bilgisini ve rapor '
+              'içeriğini işleyecek; SMS sağlayıcı kredisi tüketilebilir. Bu '
+              'ayarı istediğiniz zaman kapatabilirsiniz.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Vazgeç')),
+            TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Onayla ve Aç')),
+          ],
+        ),
+      );
+      if (approved != true || !mounted) return;
+    }
+    setState(() => _busy = true);
+    final result = await _api.setAutomaticFoodShare(enabled);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (result.isSuccess) _automaticShare = result.data!;
+    });
+    _report(
+        success: result.isSuccess,
+        message: result.isSuccess
+            ? (enabled
+                ? 'Otomatik paylaşım açıldı.'
+                : 'Otomatik paylaşım kapatıldı.')
+            : result.errorMessage ?? 'Paylaşım ayarı değiştirilemedi.');
+  }
+
+  /// Gönderilen raporların geçmişi ve diyetisyenin cevabı.
+  ///
+  /// Kullanıcı daha önce neyi paylaştığını göremiyordu; bu, paylaşımın
+  /// denetlenebilir olması için gerekli.
+  Widget _buildHistorySection() => ReportHistorySection(items: _history);
+
+  Future<void> _requestAssignment() async {
+    final email = _email.text.trim();
+    if (!email.contains('@')) {
+      _report(success: false, message: 'Geçerli bir e-posta adresi girin.');
+      return;
+    }
+    setState(() => _busy = true);
+    final result = await _api.requestDietitianAssignment(email: email);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (result.isSuccess) _assignment = result.data;
+    });
+    _report(
+      success: result.isSuccess,
+      message: result.isSuccess
+          ? 'Bağlantı isteği gönderildi. Diyetisyeninizin onayı bekleniyor.'
+          : result.errorMessage ?? 'İstek gönderilemedi.',
+    );
+  }
+
+  Future<void> _approveAssignment() async {
+    setState(() => _busy = true);
+    final result = await _api.approveDietitianAssignment(
+        assignmentId: _assignment!.assignmentId);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (result.isSuccess) _assignment = result.data;
+    });
+    // Rıza verildi diye bağ kurulmuş olmaz; rapor gönderimi diyetisyen de
+    // kabul edince açılır. Yanlış müjde vermek kullanıcıyı boş yere
+    // rapor göndermeye çalıştırıyordu.
+    final settled = result.data?.isApproved ?? false;
+    _report(
+      success: result.isSuccess,
+      message: result.isSuccess
+          ? settled
+              ? 'Bağlantı kuruldu. Artık rapor gönderebilirsiniz.'
+              : 'Onayınız alındı. Diyetisyenin kabulü bekleniyor.'
+          : result.errorMessage ?? 'Onaylama başarısız oldu.',
+    );
+  }
+
+  /// Atamayı kaldırma geri alınamaz; önce onay istenir.
+  Future<void> _cancelAssignment() async {
+    final isApproved = _assignment?.isApproved ?? false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(isApproved ? 'Atamayı Kaldır' : 'İsteği İptal Et'),
+        content: Text(
+          isApproved
+              ? 'Diyetisyeninizle bağlantınız kaldırılacak. '
+                  'Rapor gönderemezsiniz. Emin misiniz?'
+              : 'Gönderdiğiniz bağlantı isteği iptal edilecek. Emin misiniz?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            key: const Key('dietitian_cancel_confirm'),
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.errorColor),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Evet, kaldır'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    final result = await _api.cancelDietitianAssignment(
+        assignmentId: _assignment!.assignmentId);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (result.isSuccess) _assignment = null;
+    });
+    _report(
+      success: result.isSuccess,
+      message: result.isSuccess
+          ? 'Diyetisyen bağlantısı kaldırıldı.'
+          : result.errorMessage ?? 'İşlem başarısız oldu.',
+    );
+  }
+
+  Future<void> _sendReport() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+        settings: const RouteSettings(name: VoiceGuideRoutes.sendReport),
+        builder: (_) => SendReportWizard(assignment: _assignment!)));
+  }
+}

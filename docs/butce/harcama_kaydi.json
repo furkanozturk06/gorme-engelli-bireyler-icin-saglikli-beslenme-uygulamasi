@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "kayit_turu": "GERCEK",
+  "durum": "HARCAMA_GIRILMEDI",
+  "guncelleme_tarihi": null,
+  "butceye_sayilan_tutar_kurali": "kdv_dahil",
+  "belge_arsivi": {
+    "konum": null,
+    "aciklama": "Taranmış fatura ve dekontların tutulduğu dizin/arşiv. Bu dizin Git'e eklenmez; kayıtta yalnız dosya adı ve SHA-256 özeti bulunur."
+  },
+  "harcamalar": []
+}

@@ -1,0 +1,150 @@
+"""Deployment configuration and privacy-safe operations regression tests."""
+
+from __future__ import annotations
+
+import hashlib
+
+import pytest
+
+from app import main
+from app.config import Settings
+from scripts.fetch_ml_artifact import fetch
+
+
+def _staging_settings(**overrides) -> Settings:
+    values = {
+        "_env_file": None,
+        "app_environment": "staging",
+        "debug": False,
+        "public_base_url": "https://staging.nutrisense.example",
+        "api_docs_enabled": False,
+        "database_url": (
+            "mysql+pymysql://app:"
+            + ("d" * 40)
+            + "@db/nutrisense_staging?charset=utf8mb4"
+        ),
+        "jwt_secret_key": "j" * 40,
+        "secret_key": "a" * 40,
+        "research_export_token": "r" * 40,
+        "trusted_hosts": "staging.nutrisense.example",
+        "cors_origins": "https://staging-app.nutrisense.example",
+        "research_mode": "synthetic",
+        "notification_mode": "sandbox",
+        "migration_startup_mode": "verify",
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def test_staging_rejects_real_research_and_production_notifications():
+    _staging_settings().validate_security()
+    with pytest.raises(RuntimeError, match="katılımcı"):
+        _staging_settings(research_mode="approved").validate_security()
+    with pytest.raises(RuntimeError, match="bildirim"):
+        _staging_settings(notification_mode="production").validate_security()
+
+
+def test_required_provider_modes_fail_closed_without_credentials():
+    with pytest.raises(RuntimeError, match="Nutritionix"):
+        _staging_settings(
+            nutrition_provider_mode="nutritionix",
+        ).validate_security()
+    with pytest.raises(RuntimeError, match="gerçek bir SMS sağlayıcısı"):
+        _staging_settings(
+            notification_mode="production",
+            sms_provider_mode="disabled",
+        ).validate_security()
+
+
+def test_notification_readiness_exposes_only_channel_state(monkeypatch):
+    monkeypatch.setattr(main.settings, "notification_mode", "production")
+    monkeypatch.setattr(main.settings, "sms_provider_mode", "twilio")
+    monkeypatch.setattr(main.settings, "smtp_host", "smtp.example")
+    monkeypatch.setattr(main.settings, "smtp_from_email", "noreply@example.test")
+    monkeypatch.setattr(main.settings, "smtp_user", "configured")
+    monkeypatch.setattr(main.settings, "smtp_password", "configured")
+    monkeypatch.setattr(main.settings, "smtp_start_tls", True)
+    monkeypatch.setattr(main.settings, "twilio_account_sid", "AC" + "1" * 32)
+    monkeypatch.setattr(main.settings, "twilio_auth_token", "configured")
+    monkeypatch.setattr(main.settings, "twilio_phone_number", "+15551234567")
+
+    payload = main.notification_readiness()
+    assert payload == {
+        "mode": "production",
+        "email": True,
+        "sms": True,
+        "ready": True,
+    }
+    assert "configured" not in str(payload)
+
+
+def test_external_sandbox_smtp_is_not_ready_without_password(monkeypatch):
+    monkeypatch.setattr(main.settings, "app_environment", "dev")
+    monkeypatch.setattr(main.settings, "notification_mode", "sandbox")
+    monkeypatch.setattr(main.settings, "smtp_host", "smtp.gmail.com")
+    monkeypatch.setattr(main.settings, "smtp_from_email", "noreply@example.test")
+    monkeypatch.setattr(main.settings, "smtp_user", "noreply@example.test")
+    monkeypatch.setattr(main.settings, "smtp_password", "")
+    monkeypatch.setattr(main.settings, "smtp_start_tls", True)
+
+    payload = main.notification_readiness()
+    assert payload["email"] is False
+
+
+def test_local_mail_sink_is_ready_without_credentials(monkeypatch):
+    monkeypatch.setattr(main.settings, "app_environment", "dev")
+    monkeypatch.setattr(main.settings, "notification_mode", "sandbox")
+    monkeypatch.setattr(main.settings, "smtp_host", "mailpit")
+    monkeypatch.setattr(main.settings, "smtp_from_email", "noreply@nutrisense.local")
+    monkeypatch.setattr(main.settings, "smtp_user", "")
+    monkeypatch.setattr(main.settings, "smtp_password", "")
+
+    payload = main.notification_readiness()
+    assert payload["email"] is True
+
+
+def test_public_capabilities_never_expose_credentials():
+    settings = _staging_settings(
+        nutrition_provider_mode="disabled",
+    )
+    payload = settings.public_capabilities
+    serialized = str(payload).lower()
+    assert payload["research"]["mode"] == "synthetic"
+    assert payload["vision"]["enabled"] is False
+    assert "secret" not in serialized
+    assert "token" not in serialized
+    assert "password" not in serialized
+
+
+def test_operations_metrics_are_closed_and_low_cardinality(client, monkeypatch):
+    assert client.get("/operations/metrics").status_code == 404
+
+    monkeypatch.setattr(main.settings, "metrics_enabled", True)
+    monkeypatch.setattr(main.settings, "operations_token", "o" * 40)
+    response = client.get(
+        "/operations/metrics",
+        headers={"X-Operations-Token": "o" * 40},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "request_count" in payload
+    assert "queue_depth" in payload
+    assert "db_pool" in payload
+    serialized = str(payload).lower()
+    # Static route templates such as ``/users/me/email-change`` are bounded
+    # labels. Metrics must not contain actual addresses or user-controlled
+    # personal data.
+    for forbidden in ("@", "phone_number", "food_name", "authorization"):
+        assert forbidden not in serialized
+
+
+def test_ml_artifact_requires_https_and_verified_checksum(tmp_path):
+    destination = tmp_path / "model.tflite"
+    with pytest.raises(SystemExit, match="HTTPS"):
+        fetch(
+            url="http://localhost/model.tflite",
+            sha256=hashlib.sha256(b"fixture").hexdigest(),
+            destination=destination,
+            max_bytes=1024,
+        )
+    assert not destination.exists()

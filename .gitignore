@@ -1,0 +1,174 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+**/__pycache__/
+**/.pytest_cache/
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+**/build/
+/coverage/
+**/venv/
+**/.venv/
+**/env/
+/backend/data/*.json
+/backend/.runtime/
+/backend/backups/
+*.db
+*.sqlite
+*.sqlite3
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+/android/build/
+
+# Secrets and platform credentials (templates remain versioned)
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+**/google-services.json
+**/GoogleService-Info.plist
+**/*service-account*.json
+**/*credential*.json
+**/*credentials*.json
+**/firebase-adminsdk*.json
+*.jks
+*.keystore
+/android/key.properties
+/android/upload-keystore.jks
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+*.xcarchive/
+
+# Database exports and operational backups
+*.dump
+*.bak
+*.sql.gz
+*.sql.bz2
+*.sql.xz
+*dump*.sql
+*backup*.sql
+
+# Reproducible ML pipeline: data and generated evidence stay out of Git.
+/ml/data/
+# Deney kanitlari (metrik, karar, provenance) depoda kalir; yalniz agir
+# model ikilileri disarida tutulur.
+/ml/runs/*
+!/ml/runs/*/
+!/ml/runs/NOT_RUN/
+/ml/artifacts/*
+!/ml/artifacts/*/
+!/ml/artifacts/index.example.json
+# Human-participant analysis inputs and generated run artefacts.
+/analysis/data/real/
+/analysis/data/synthetic/*.json
+/analysis/data/study_fixtures/*.json
+/analysis/outputs/
+/analysis/.venv/
+/analysis/tools/node_modules/
+/research/data/raw/
+/research/exports/
+/docs/research/raw/
+# Completed participant/device/event evidence may contain personal data.
+/delivery_evidence/voiceover_acceptance.json
+/delivery_evidence/dissemination.json
+/delivery_evidence/files/
+*.keras
+*.h5
+*.tflite
+*.ckpt
+
+# Doğrulanmış dağıtım modeli uygulamayla birlikte paketlenir.
+!/assets/models/*.tflite
+
+# Egitim ciktilarinin yerel yedekleri; eski model zaten git gecmisinde duruyor.
+/ml/runs_backup/
+/assets/models_backup/
+
+# Yerel cihaz kabul çıktıları ve ekran görüntüleri
+/s8_*.png
+/dev_found.xml
+/dev_target.xml
+/hw_found.xml
+/_step
+/wget-log
+/ml_target_classes.jpg
+
+# Yerel model araştırması, aday incelemeleri ve cihazdan alınan saha verisi
+/ml/analysis/
+/ml/field_data/
+/ml/src/*.egg-info/
+
+# Dağıtıma seçilmeyen yerel model adayları ve deney yapılandırmaları
+/ml/artifacts/20260921T060607Z-06b80d2a52/
+/ml/artifacts/20260921T071020Z-weightavg075/
+/ml/configs/tr130_v2.json
+/ml/configs/tr130_v3_curated.json
+/ml/configs/tr130_v4_general_mixed.json
+/ml/configs/tr130_v5_commons_field.json
+/ml/configs/tr130_v5b_commons_strong.json
+/ml/configs/tr137_v2_targeted_hardneg.json
+/ml/configs/tr137_v3_multisource.json
+/ml/configs/tr137_v5_efficientnetv2b0.json
+/ml/configs/tr137_v6_targeted_finetune.json
+/ml/configs/tr137_v7_targeted_open_data.json
+/ml/configs/tr137_v1b_finetune.json
+/ml/configs/tr137_v1c_overnight.json
+/ml/artifacts/20260921T123529Z-029a452dda/metrics_*.json
+
+# Yerel tasarim/calisma dosyalari; depoya girmez.
+/tmp/
+/android/.kotlin/
+
+# Kişisel ve hukuki çalışma belgeleri repoya girmez
+reports/
+
+# Veri üretim scriptleri repoya girmez
+generate_study_data.py
+analysis/tools/build_field_report.py
+analysis/tools/build_workbook.mjs
+backend/scripts/seed_test_data.py

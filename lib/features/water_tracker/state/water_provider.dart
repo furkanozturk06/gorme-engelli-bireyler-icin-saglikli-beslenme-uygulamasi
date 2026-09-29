@@ -1,0 +1,582 @@
+// =============================================================================
+// lib/features/water_tracker/state/water_provider.dart
+// NutriSense — Sağlık ve Aktivite Durumu
+//
+// Su, adım, uyku, ruh hâli, kilo ve takviye takibi. Cihazdaki kopya Android
+// Keystore / iOS Keychain korumalı güvenli depoda saklanır; günlük ölçümler
+// tarih değişince sıfırlanır.
+// =============================================================================
+
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../../shared/services/api_service.dart';
+import '../../auth/state/auth_controller.dart';
+import '../services/step_counter_service.dart';
+
+const _kStateKey = 'activity_state_v1';
+const _kDayKey = 'activity_state_day';
+
+/// Sağlık ölçümlerinin cihazdaki deposu.
+abstract class ActivityStateStore {
+  Future<String?> read(String key);
+  Future<void> write(String key, String value);
+  Future<void> delete(String key);
+}
+
+/// Ölçümleri şifreli saklar. İlaç listesi, ruh hâli ve uyku gibi sağlık
+/// verileri düz metin tercih dosyasında veya şifresiz yedekte kalmamalıdır.
+class SecureActivityStateStore implements ActivityStateStore {
+  const SecureActivityStateStore(
+      [this._storage = const FlutterSecureStorage()]);
+
+  final FlutterSecureStorage _storage;
+
+  @override
+  Future<String?> read(String key) => _storage.read(key: key);
+
+  @override
+  Future<void> write(String key, String value) =>
+      _storage.write(key: key, value: value);
+
+  @override
+  Future<void> delete(String key) => _storage.delete(key: key);
+}
+
+class _StoredActivity {
+  const _StoredActivity(this.savedState, this.day);
+
+  final String? savedState;
+  final String? day;
+}
+
+enum StepTrackingStatus {
+  idle,
+  requestingPermission,
+  active,
+  denied,
+  unavailable
+}
+
+class BadgeModel {
+  const BadgeModel({
+    required this.title,
+    required this.icon,
+    required this.description,
+    this.isUnlocked = false,
+  });
+
+  final String title;
+  final String icon;
+
+  /// Rozetin hangi davranışla kazanıldığı; ekran okuyucu bunu okur.
+  final String description;
+  final bool isUnlocked;
+}
+
+/// İlaç / takviye hatırlatması.
+class MedicationModel {
+  const MedicationModel({
+    required this.name,
+    required this.schedule,
+    this.isTaken = false,
+  });
+
+  final String name;
+  final String schedule;
+  final bool isTaken;
+
+  MedicationModel copyWith({bool? isTaken}) => MedicationModel(
+        name: name,
+        schedule: schedule,
+        isTaken: isTaken ?? this.isTaken,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'schedule': schedule,
+        'isTaken': isTaken,
+      };
+
+  factory MedicationModel.fromJson(Map<String, dynamic> json) =>
+      MedicationModel(
+        name: json['name'] as String? ?? '',
+        schedule: json['schedule'] as String? ?? '',
+        isTaken: json['isTaken'] as bool? ?? false,
+      );
+}
+
+class ActivityState {
+  const ActivityState({
+    this.consumedWater = 0,
+    this.waterGoal = 2500,
+    this.steps = 0,
+    this.stepGoal = 10000,
+    this.sensorRawSteps,
+    this.stepTrackingStatus = StepTrackingStatus.idle,
+    this.currentWeight,
+    this.weightHistory = const [],
+    this.currentMood,
+    this.sleepHours = 0,
+    this.sleepGoal = 8.0,
+    this.medications = const [],
+    this.isLoaded = false,
+  });
+
+  final int consumedWater;
+  final int waterGoal;
+  final int steps;
+  final int stepGoal;
+  final int? sensorRawSteps;
+  final StepTrackingStatus stepTrackingStatus;
+
+  /// Kullanıcı girene kadar boştur; uydurma bir başlangıç değeri gösterilmez.
+  final double? currentWeight;
+  final List<double> weightHistory;
+  final String? currentMood;
+  final double sleepHours;
+  final double sleepGoal;
+  final List<MedicationModel> medications;
+
+  /// Kayıtlı veri okunana kadar false; ekran bu sırada boş değer göstermez.
+  final bool isLoaded;
+
+  double get waterProgress =>
+      waterGoal <= 0 ? 0 : (consumedWater / waterGoal).clamp(0.0, 1.0);
+  double get stepProgress =>
+      stepGoal <= 0 ? 0 : (steps / stepGoal).clamp(0.0, 1.0);
+  double get sleepProgress =>
+      sleepGoal <= 0 ? 0 : (sleepHours / sleepGoal).clamp(0.0, 1.0);
+
+  bool get hasWeight => currentWeight != null;
+
+  String get stepTrackingDescription => switch (stepTrackingStatus) {
+        StepTrackingStatus.idle => 'Adım sensörü bekleniyor',
+        StepTrackingStatus.requestingPermission => 'Hareket izni bekleniyor',
+        StepTrackingStatus.active => 'Telefonun adım sensörüyle güncelleniyor',
+        StepTrackingStatus.denied => 'Hareket izni verilmedi',
+        StepTrackingStatus.unavailable =>
+          'Bu cihazda adım sensörü kullanılamıyor',
+      };
+
+  /// Rozetler gerçek ilerlemeden türetilir; hepsi baştan açık değildir.
+  List<BadgeModel> get badges => [
+        BadgeModel(
+          title: 'Su Avcısı',
+          icon: '💧',
+          description: 'Günlük su hedefini tamamla',
+          isUnlocked: consumedWater >= waterGoal,
+        ),
+        BadgeModel(
+          title: 'Yolcu',
+          icon: '👟',
+          description: 'Günlük adım hedefini tamamla',
+          isUnlocked: steps >= stepGoal,
+        ),
+        BadgeModel(
+          title: 'Uykucu',
+          icon: '🌙',
+          description: 'Uyku hedefine ulaş',
+          isUnlocked: sleepHours >= sleepGoal,
+        ),
+        BadgeModel(
+          title: 'Takipçi',
+          icon: '⚖️',
+          description: 'En az üç kilo ölçümü kaydet',
+          isUnlocked: weightHistory.length >= 3,
+        ),
+      ];
+
+  ActivityState copyWith({
+    int? consumedWater,
+    int? waterGoal,
+    int? steps,
+    int? stepGoal,
+    int? sensorRawSteps,
+    StepTrackingStatus? stepTrackingStatus,
+    double? currentWeight,
+    List<double>? weightHistory,
+    String? currentMood,
+    double? sleepHours,
+    double? sleepGoal,
+    List<MedicationModel>? medications,
+    bool? isLoaded,
+  }) {
+    return ActivityState(
+      consumedWater: consumedWater ?? this.consumedWater,
+      waterGoal: waterGoal ?? this.waterGoal,
+      steps: steps ?? this.steps,
+      stepGoal: stepGoal ?? this.stepGoal,
+      sensorRawSteps: sensorRawSteps ?? this.sensorRawSteps,
+      stepTrackingStatus: stepTrackingStatus ?? this.stepTrackingStatus,
+      currentWeight: currentWeight ?? this.currentWeight,
+      weightHistory: weightHistory ?? this.weightHistory,
+      currentMood: currentMood ?? this.currentMood,
+      sleepHours: sleepHours ?? this.sleepHours,
+      sleepGoal: sleepGoal ?? this.sleepGoal,
+      medications: medications ?? this.medications,
+      isLoaded: isLoaded ?? this.isLoaded,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'consumedWater': consumedWater,
+        'waterGoal': waterGoal,
+        'steps': steps,
+        'stepGoal': stepGoal,
+        'sensorRawSteps': sensorRawSteps,
+        'currentWeight': currentWeight,
+        'weightHistory': weightHistory,
+        'currentMood': currentMood,
+        'sleepHours': sleepHours,
+        'sleepGoal': sleepGoal,
+        'medications': medications.map((item) => item.toJson()).toList(),
+      };
+
+  factory ActivityState.fromJson(Map<String, dynamic> json) => ActivityState(
+        consumedWater: json['consumedWater'] as int? ?? 0,
+        waterGoal: json['waterGoal'] as int? ?? 2500,
+        steps: json['steps'] as int? ?? 0,
+        stepGoal: json['stepGoal'] as int? ?? 10000,
+        sensorRawSteps: json['sensorRawSteps'] as int?,
+        currentWeight: (json['currentWeight'] as num?)?.toDouble(),
+        weightHistory: (json['weightHistory'] as List<dynamic>? ?? const [])
+            .whereType<num>()
+            .map((value) => value.toDouble())
+            .toList(growable: false),
+        currentMood: json['currentMood'] as String?,
+        sleepHours: (json['sleepHours'] as num?)?.toDouble() ?? 0,
+        sleepGoal: (json['sleepGoal'] as num?)?.toDouble() ?? 8.0,
+        medications: (json['medications'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(MedicationModel.fromJson)
+            .toList(growable: false),
+        isLoaded: true,
+      );
+}
+
+class ActivityNotifier extends StateNotifier<ActivityState> {
+  ActivityNotifier(
+    this._api, [
+    this._stepCounter,
+    this._store = const SecureActivityStateStore(),
+  ]) : super(const ActivityState()) {
+    _initialize();
+  }
+
+  /// Sunucu erişilemezse ölçümler yalnız cihazda tutulur; kullanıcı veri
+  /// girişini kaybetmez.
+  final ApiService? _api;
+  final StepCounterSource? _stepCounter;
+  final ActivityStateStore _store;
+  StreamSubscription<int>? _stepSubscription;
+  String _trackingDay = _today();
+
+  Future<void> _initialize() async {
+    await _restore();
+    if (!mounted) return;
+    await _startStepTracking();
+  }
+
+  static String _today() {
+    final now = DateTime.now();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+  }
+
+  /// Kayıtlı durumu okur.
+  ///
+  /// Günlük ölçümler (su, adım, uyku, ruh hâli, takviye) tarih değişince
+  /// sıfırlanır; hedefler, kilo geçmişi ve takviye listesi korunur.
+  Future<void> _restore() async {
+    try {
+      final stored = await _readStored();
+      // Şifreli depo okuması sürerken ekran kapanmış olabilir.
+      if (!mounted) return;
+      final raw = stored.savedState;
+      if (raw == null) {
+        state = state.copyWith(isLoaded: true);
+        await _pullFromServer();
+        return;
+      }
+      var restored = ActivityState.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
+      if (stored.day != _today()) {
+        // copyWith null'ı "değiştirme" saydığı için ruh hâlini temizlemek
+        // adına durum açıkça kurulur.
+        restored = ActivityState(
+          consumedWater: 0,
+          waterGoal: restored.waterGoal,
+          steps: 0,
+          stepGoal: restored.stepGoal,
+          sensorRawSteps: null,
+          stepTrackingStatus: StepTrackingStatus.idle,
+          currentWeight: restored.currentWeight,
+          weightHistory: restored.weightHistory,
+          currentMood: null,
+          sleepHours: 0,
+          sleepGoal: restored.sleepGoal,
+          medications: restored.medications
+              .map((item) => item.copyWith(isTaken: false))
+              .toList(growable: false),
+          isLoaded: true,
+        );
+      }
+      state = restored;
+    } catch (_) {
+      // Bozuk kayıt kullanıcıyı kilitlememeli; varsayılanla devam edilir.
+      if (!mounted) return;
+      state = state.copyWith(isLoaded: true);
+    }
+    await _pullFromServer();
+  }
+
+  /// Kayıtlı durumu güvenli depodan okur.
+  ///
+  /// Eski sürümler durumu SharedPreferences'a düz metin yazıyordu. Böyle bir
+  /// kayıt varsa bir kez güvenli depoya taşınır ve düz kopyası silinir.
+  Future<_StoredActivity> _readStored() async {
+    var savedState = await _store.read(_kStateKey);
+    var day = await _store.read(_kDayKey);
+    final prefs = await SharedPreferences.getInstance();
+    final legacyState = prefs.getString(_kStateKey);
+    if (legacyState != null) {
+      if (savedState == null) {
+        savedState = legacyState;
+        day = prefs.getString(_kDayKey);
+        await _store.write(_kStateKey, legacyState);
+        if (day != null) await _store.write(_kDayKey, day);
+      }
+      await prefs.remove(_kStateKey);
+      await prefs.remove(_kDayKey);
+    }
+    return _StoredActivity(savedState, day);
+  }
+
+  /// Hesaba bağlı ölçümleri sunucudan çeker.
+  ///
+  /// Sunucu kaynağı esas alır: ölçümler cihazda değil hesapta yaşar, böylece
+  /// uygulama silinse de veri kaybolmaz.
+  Future<void> _pullFromServer() async {
+    final api = _api;
+    // Oturum açılmadan ölçüm çekmek anlamsız; kimlik doğrulaması yoksa
+    // yalnız cihazdaki kayıt kullanılır.
+    if (api == null || !api.isAuthenticated) return;
+    final daily = await api.getTodayHealthMetrics();
+    final weights = await api.getWeightHistory();
+    if (!mounted) return;
+
+    var next = state;
+    if (daily.isSuccess && daily.data != null) {
+      final data = daily.data!;
+      next = next.copyWith(
+        consumedWater: data['water_ml'] as int? ?? next.consumedWater,
+        steps: _largerStepCount(data['steps'] as int?, next.steps),
+        sleepHours:
+            (data['sleep_hours'] as num?)?.toDouble() ?? next.sleepHours,
+        currentMood: data['mood'] as String?,
+      );
+    }
+    if (weights.isSuccess && weights.data != null) {
+      final history = (weights.data!['measurements'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((item) => (item['weight_kg'] as num).toDouble())
+          .toList(growable: false);
+      next = next.copyWith(
+        weightHistory: history,
+        currentWeight: (weights.data!['current_weight'] as num?)?.toDouble(),
+      );
+    }
+    state = next.copyWith(isLoaded: true);
+    unawaited(_persist());
+  }
+
+  static int _largerStepCount(int? serverSteps, int localSteps) =>
+      serverSteps == null || serverSteps < localSteps
+          ? localSteps
+          : serverSteps;
+
+  Future<void> _startStepTracking() async {
+    final source = _stepCounter;
+    if (source == null || !mounted) return;
+    state = state.copyWith(
+      stepTrackingStatus: StepTrackingStatus.requestingPermission,
+    );
+    try {
+      if (!await source.requestPermission()) {
+        if (mounted) {
+          state = state.copyWith(stepTrackingStatus: StepTrackingStatus.denied);
+        }
+        return;
+      }
+      if (!mounted) return;
+      state = state.copyWith(stepTrackingStatus: StepTrackingStatus.active);
+      _stepSubscription = source.stepCountStream.listen(
+        _onSensorStepCount,
+        onError: (_) {
+          if (mounted) {
+            state = state.copyWith(
+              stepTrackingStatus: StepTrackingStatus.unavailable,
+            );
+          }
+        },
+      );
+    } catch (_) {
+      if (mounted) {
+        state = state.copyWith(
+          stepTrackingStatus: StepTrackingStatus.unavailable,
+        );
+      }
+    }
+  }
+
+  void _onSensorStepCount(int rawSteps) {
+    if (!mounted || rawSteps < 0) return;
+    final today = _today();
+    if (_trackingDay != today) {
+      _trackingDay = today;
+      state = ActivityState(
+        waterGoal: state.waterGoal,
+        steps: 0,
+        stepGoal: state.stepGoal,
+        sensorRawSteps: rawSteps,
+        stepTrackingStatus: StepTrackingStatus.active,
+        currentWeight: state.currentWeight,
+        weightHistory: state.weightHistory,
+        sleepGoal: state.sleepGoal,
+        medications: state.medications
+            .map((item) => item.copyWith(isTaken: false))
+            .toList(growable: false),
+        isLoaded: true,
+      );
+      unawaited(_persist());
+      return;
+    }
+
+    final previousRaw = state.sensorRawSteps;
+    if (previousRaw == null || rawSteps < previousRaw) {
+      state = state.copyWith(
+        sensorRawSteps: rawSteps,
+        stepTrackingStatus: StepTrackingStatus.active,
+      );
+      unawaited(_persist());
+      return;
+    }
+    final delta = rawSteps - previousRaw;
+    if (delta == 0) return;
+    state = state.copyWith(
+      steps: (state.steps + delta).clamp(0, 500000),
+      sensorRawSteps: rawSteps,
+      stepTrackingStatus: StepTrackingStatus.active,
+    );
+    unawaited(_persist());
+    unawaited(_api?.updateTodayHealthMetrics(steps: state.steps));
+  }
+
+  Future<void> _persist() async {
+    try {
+      await _store.write(_kStateKey, jsonEncode(state.toJson()));
+      await _store.write(_kDayKey, _today());
+    } catch (_) {
+      // Depolama hatası ölçüm girişini engellememelidir.
+    }
+  }
+
+  void addWater(int ml) {
+    state = state.copyWith(
+      consumedWater: (state.consumedWater + ml).clamp(0, 100000),
+    );
+    _persist();
+    unawaited(_api?.updateTodayHealthMetrics(waterMl: state.consumedWater));
+  }
+
+  void addSteps(int count) {
+    state = state.copyWith(steps: (state.steps + count).clamp(0, 500000));
+    _persist();
+    unawaited(_api?.updateTodayHealthMetrics(steps: state.steps));
+  }
+
+  void updateWeight(double weight) {
+    if (weight <= 0 || weight > 500) return;
+    final history = List<double>.from(state.weightHistory)..add(weight);
+    // Grafik son ölçümlerle anlamlı; sınırsız büyümesine gerek yok.
+    final trimmed =
+        history.length > 30 ? history.sublist(history.length - 30) : history;
+    state = state.copyWith(currentWeight: weight, weightHistory: trimmed);
+    _persist();
+    unawaited(_api?.addWeightMeasurement(weightKg: weight));
+  }
+
+  void setMood(String mood) {
+    state = state.copyWith(currentMood: mood);
+    _persist();
+    unawaited(_api?.updateTodayHealthMetrics(mood: mood));
+  }
+
+  /// Uyku süresini saat cinsinden kaydeder. 0-24 aralığına sıkıştırılır.
+  void setSleep(double hours) {
+    state = state.copyWith(sleepHours: hours.clamp(0, 24));
+    _persist();
+    unawaited(_api?.updateTodayHealthMetrics(sleepHours: state.sleepHours));
+  }
+
+  /// Takip edilecek yeni bir takviye ekler.
+  void addMedication(String name, String schedule) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    if (state.medications.any((item) => item.name == trimmed)) return;
+    state = state.copyWith(
+      medications: [
+        ...state.medications,
+        MedicationModel(name: trimmed, schedule: schedule.trim()),
+      ],
+    );
+    _persist();
+  }
+
+  void removeMedication(String name) {
+    state = state.copyWith(
+      medications: state.medications
+          .where((item) => item.name != name)
+          .toList(growable: false),
+    );
+    _persist();
+  }
+
+  /// İlacın alındı durumunu tersine çevirir.
+  void toggleMedication(String name) {
+    state = state.copyWith(
+      medications: state.medications
+          .map((med) =>
+              med.name == name ? med.copyWith(isTaken: !med.isTaken) : med)
+          .toList(growable: false),
+    );
+    _persist();
+  }
+
+  @override
+  void dispose() {
+    unawaited(_stepSubscription?.cancel());
+    super.dispose();
+  }
+}
+
+final stepCounterSourceProvider = Provider<StepCounterSource>(
+  (ref) => const DeviceStepCounterSource(),
+);
+
+final activityProvider = StateNotifierProvider<ActivityNotifier, ActivityState>(
+  (ref) {
+    final auth = ref.watch(authControllerProvider);
+    final authenticated = auth.status == AuthStatus.authenticated;
+    return ActivityNotifier(
+      authenticated ? ref.read(apiServiceProvider) : null,
+      ref.read(stepCounterSourceProvider),
+    );
+  },
+);

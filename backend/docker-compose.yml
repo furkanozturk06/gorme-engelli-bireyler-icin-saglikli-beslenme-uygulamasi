@@ -1,0 +1,113 @@
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      TZ: UTC
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--default-time-zone=+00:00"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} --password=$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
+
+  backend:
+    build:
+      context: .
+      target: production
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: mysql+pymysql://${DB_USER}:${DB_PASSWORD}@db:3306/${DB_NAME}?charset=utf8mb4
+      # /app salt okunurdur; yerel SMS kutusu yazılabilir dizine yazar.
+      SMS_OUTBOX_PATH: /tmp/sms_outbox.jsonl
+      # .env içinde gerçek sağlayıcı seçildiyse ezme; varsayılan yerel kutudur.
+      SMS_PROVIDER_MODE: ${SMS_PROVIDER_MODE:-local_outbox}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
+      SMTP_START_TLS: ${SMTP_START_TLS:-false}
+      # Mailpit kimlik doğrulaması istemez; .env'deki placeholder
+      # değerler SMTP el sıkışmasını bozuyordu.
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-NutriSense}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-no-reply@nutrisense.invalid}
+      NOTIFICATION_MODE: ${NOTIFICATION_MODE:-sandbox}
+      NOTIFICATION_SANDBOX_EMAIL_ALLOWLIST: ${NOTIFICATION_SANDBOX_EMAIL_ALLOWLIST:-}
+      CALORIE_DB_PATH: /app/app/data/verified_nutrition.json
+      # Sağlayıcı anahtarı .env dosyasından gelir. Anahtar yoksa mod
+      # verified_local kalır ve uygulama yalnız USDA kataloğuyla çalışır;
+      # boş anahtarla hybrid seçmek açılışta hata verir.
+      NUTRITION_PROVIDER_MODE: ${NUTRITION_PROVIDER_MODE:-verified_local}
+      NUTRITIONIX_APP_ID: ${NUTRITIONIX_APP_ID:-}
+      NUTRITIONIX_API_KEY: ${NUTRITIONIX_API_KEY:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  test-db:
+    image: mysql:8.4
+    profiles: ["test"]
+    environment:
+      MYSQL_DATABASE: ${TEST_DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      TZ: UTC
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} --password=$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  test:
+    build:
+      context: .
+      target: test
+    profiles: ["test"]
+    # Test konteynerine gelistirici .env dosyasini aktarma. Aksi halde SMTP,
+    # bildirim modu ve startup ayarlari izole test davranisini degistirir.
+    entrypoint: []
+    environment:
+      APP_ENVIRONMENT: test
+      DEBUG: "false"
+      DATABASE_URL: mysql+pymysql://${DB_USER}:${DB_PASSWORD}@test-db:3306/${TEST_DB_NAME}?charset=utf8mb4
+      MIGRATION_STARTUP_MODE: verify
+      MIGRATION_CHECK_ENABLED: "false"
+    volumes:
+      - ../contracts:/contracts:ro
+      - ../ml:/ml:ro
+      - ../scripts:/scripts:ro
+      - ../ai_model:/ai_model:ro
+    command: ["sh", "-c", "alembic upgrade head && pytest -q"]
+    depends_on:
+      test-db:
+        condition: service_healthy
+
+volumes:
+  mysql_data:

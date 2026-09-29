@@ -1,0 +1,607 @@
+// =============================================================================
+// lib/shared/services/voice_command_service.dart
+// NutriSense — Sesli Komut Tanıma Servisi
+//
+// speech_to_text ile Türkçe sesli komut tanıma.
+// Fuzzy matching ile yaklaşık eşleşme.
+// Komut yönlendirme + haptic onay + TTS geri bildirim.
+//
+// Desteklenen komutlar:
+//   "Tara"     → kamera ekranını aç
+//   "Geçmiş"   → kalori geçmişini sesli oku
+//   "Bugün"    → günlük özeti sesli oku
+//   "Gönder"   → diyetisyene rapor gönder
+//   "İptal"    → mevcut işlemi iptal et
+//   "Ayarlar"  → ayarlar ekranını aç
+//   "Yardım"   → komut listesini oku
+// =============================================================================
+
+import 'dart:async';
+import 'dart:math';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'on_device_voice_policy.dart';
+import 'speech_locale_policy.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
+import 'package:speech_to_text/speech_recognition_error.dart';
+
+import '../../core/constants/app_strings.dart';
+import 'accessibility_service.dart';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// KOMUT TANIMLARI
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Tanınan sesli komut
+enum VoiceCommand {
+  frequentMeals('Sık tüketilen öğünler',
+      ['sık tüketilenler', 'sık tükettiklerim', 'sık tüketilen öğünler']),
+  usualBreakfast('Her zamanki kahvaltımı ekle',
+      ['her zamanki kahvaltımı ekle', 'kahvaltımı tekrar ekle']),
+  undoFood('Son işlemi geri al',
+      ['son işlemi geri al', 'son besin işlemini geri al']),
+  scan('Tara', [
+    'tara',
+    'besin tara',
+    'tarama',
+    'taramaya başla',
+    'yiyecek tara',
+    'kamera',
+    'kamerayı aç',
+    'taramayı aç',
+  ]),
+  history('Geçmiş', [
+    'geçmiş',
+    'geçmişimi göster',
+    'geçmişi aç',
+    'geçmişim',
+    'ne yedim',
+    'yemeklerim'
+  ]),
+  today(
+      'Bugün', ['bugün', 'bugün ne yedim', 'bugünkü', 'günlük özet', 'günlük']),
+  send('Gönder', [
+    'gönder',
+    'gönderir misin',
+    'diyetisyene gönder',
+    'rapor gönder',
+    'raporla',
+    'paylaş'
+  ]),
+  cancel('İptal', ['iptal', 'iptal et', 'vazgeç', 'durdur', 'bırak']),
+  settings('Ayarlar',
+      ['ayarlar', 'ayarları aç', 'ayarlara git', 'tercihler', 'seçenekler']),
+  whereAmI('Neredeyim', [
+    'neredeyim',
+    'hangi ekrandayım',
+    'burası neresi',
+    'şu an neredeyim',
+  ]),
+  help('Yardım', ['yardım', 'komutlar', 'ne yapabilirim', 'ne diyebilirim']),
+  readNutrition('Besin bilgilerini oku', [
+    'besin bilgilerini oku',
+    'besin değerlerini oku',
+    'detayları oku',
+    'tekrar oku',
+  ]),
+  yes('Evet', ['evet', 'tamam', 'olur', 'kabul', 'kaydet', 'onayla']),
+  no('Hayır', ['hayır', 'yok', 'istemiyorum', 'reddet']),
+
+  // Yeni Sağlık Takibi Komutları
+  addWater('Su Ekle', ['su içtim', 'su ekle', 'bir bardak su', 'su kaydet']),
+  setMood('Duygu Durumu', [
+    'mutluyum',
+    'yorgunum',
+    'üzgünüm',
+    'enerjiğim',
+    'enerjik hissediyorum',
+    'normal hissediyorum'
+  ]),
+  logWeight('Kilo Kaydet', ['kilomu kaydet', 'kilo ekle', 'kilom']),
+  logSleep('Uyku Kaydet', [
+    'uyku kaydet',
+    'uykumu kaydet',
+    'uyku süresi',
+    'kaç saat uyudum',
+    'uyudum',
+  ]),
+
+  /// Besini adıyla kaydetme. Uygulamanın ana işlevi olduğu için hiçbir
+  /// düğme aranmadan, tek cümleyle tamamlanabilmelidir:
+  /// "köfte ekle", "yemek ekle" → ardından besin adı sorulur.
+  logFood('Besin Ekle', [
+    'besin ekle',
+    'yemek ekle',
+    'yemek kaydet',
+    'besin kaydet',
+    'yedim',
+    'öğün ekle',
+  ]);
+
+  const VoiceCommand(this.displayName, this.aliases);
+  final String displayName;
+  final List<String> aliases;
+}
+
+/// Komut tanıma sonucu
+class CommandResult {
+  final VoiceCommand? command;
+  final double confidence;
+  final String rawText;
+  final bool recognized;
+
+  const CommandResult({
+    this.command,
+    this.confidence = 0,
+    required this.rawText,
+    this.recognized = false,
+  });
+}
+
+/// Komut dinleme durumu
+enum ListeningState { idle, listening, processing }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CALLBACK TİPLERİ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+typedef OnCommandRecognized = void Function(CommandResult result);
+typedef OnListeningStateChanged = void Function(ListeningState state);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ANA SERVİS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class VoiceCommandService {
+  final AccessibilityService _accessibility;
+  final stt.SpeechToText _speech = stt.SpeechToText();
+
+  // ── Durum ──
+  bool _isInitialized = false;
+  String? _turkishLocaleId;
+  ListeningState _listeningState = ListeningState.idle;
+  Timer? _restartTimer;
+  Timer? _timeoutTimer;
+
+  // ── Callback'ler ──
+  OnCommandRecognized? onCommandRecognized;
+  OnListeningStateChanged? onListeningStateChanged;
+
+  // ── Ayarlar ──
+  static const _listenTimeout = Duration(seconds: 10);
+  static const _restartDelay = Duration(seconds: 2);
+  static const _minConfidence = 0.4; // Fuzzy match eşiği
+  bool _continuousMode = false;
+  // Önce cihaz üstü tanıma denenir; ses cihazdan çıkmaz. Dil paketi yoksa
+  // bir kez standart tanımaya dönülür.
+  bool _preferOnDevice = false;
+
+  VoiceCommandService({required AccessibilityService accessibility})
+      : _accessibility = accessibility;
+
+  ListeningState get listeningState => _listeningState;
+  bool get isListening => _listeningState == ListeningState.listening;
+  bool get isInitialized => _isInitialized;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BAŞLATMA
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Sesli komut servisini başlatır
+  Future<bool> initialize() async {
+    if (_isInitialized) return true;
+
+    try {
+      final microphoneStatus = await Permission.microphone.request();
+      if (!microphoneStatus.isGranted) {
+        await _accessibility.speakError(
+          AppStrings.errorMicrophonePermission,
+        );
+        return false;
+      }
+
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        final speechStatus = await Permission.speech.request();
+        if (!speechStatus.isGranted) {
+          await _accessibility.speakError(
+            'Konuşma tanıma izni verilmedi. '
+            'Dokunmatik veya klavye ile devam edebilirsiniz.',
+          );
+          return false;
+        }
+      }
+
+      _isInitialized = await _speech.initialize(
+        onError: _onError,
+        onStatus: _onStatus,
+        debugLogging: false,
+      );
+
+      if (_isInitialized) {
+        _preferOnDevice = await resolveOnDeviceSpeechPreference();
+        // Türkçe locale kontrol
+        final locales = await _speech.locales();
+        _turkishLocaleId = selectTurkishSpeechLocale(
+          locales.map((locale) => locale.localeId),
+        );
+
+        if (_turkishLocaleId == null) {
+          await _accessibility.speakWarning(
+            'Türkçe ses tanıma bu cihazda bulunamadı. '
+            'Dokunmatik veya klavye ile devam edebilirsiniz.',
+          );
+        }
+      } else {
+        // İzin verilmiş ama motor yine de başlamadıysa sebep izin değildir:
+        // cihazda kayıtlı bir android.speech.RecognitionService yoktur.
+        // (Google Play içermeyen emülatör imajlarında sık görülür.)
+        await _accessibility.speakError(
+          'Bu cihazda konuşma tanıma servisi bulunamadı. '
+          'Sesli komutlar kullanılamıyor; dokunmatik veya klavye ile '
+          'devam edebilirsiniz.',
+        );
+      }
+
+      return _isInitialized;
+    } catch (e) {
+      await _accessibility.speakError(
+        'Sesli komut başlatılamadı. $e',
+      );
+      return false;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DİNLEME KONTROL
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Tek seferlik dinleme başlatır
+  Future<void> startListening() async {
+    if (!_isInitialized) {
+      final ok = await initialize();
+      if (!ok) return;
+    }
+
+    if (_speech.isListening) {
+      await _speech.stop();
+    }
+    if (_turkishLocaleId == null) {
+      await _accessibility.speakWarning(
+        'Türkçe ses tanıma kullanılamıyor. '
+        'Dokunmatik veya klavye ile devam edin.',
+      );
+      return;
+    }
+
+    await _accessibility.prepareForSpeechInput();
+    // Bazı eski Android cihazlarda TTS ses oturumu mikrofon açıldıktan sonra
+    // birkaç yüz milisaniye daha yankılanır. Kısa bekleme, ilk hecenin ve TTS
+    // kuyruğunun tanımaya karışmasını önler.
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    _setListeningState(ListeningState.listening);
+    await _accessibility.lightHaptic();
+
+    await _listen();
+  }
+
+  Future<void> _listen() async {
+    await _speech.listen(
+      onResult: _onResult,
+      listenOptions: stt.SpeechListenOptions(
+        listenFor: _listenTimeout,
+        pauseFor: const Duration(seconds: 2),
+        localeId: _turkishLocaleId,
+        listenMode: stt.ListenMode.confirmation,
+        cancelOnError: false,
+        partialResults: true,
+        onDevice: _preferOnDevice,
+      ),
+    );
+  }
+
+  /// Sürekli dinleme modunu başlatır (pil tüketimine dikkat!)
+  Future<void> startContinuousListening() async {
+    _continuousMode = true;
+    await startListening();
+  }
+
+  /// Dinlemeyi durdurur
+  Future<void> stopListening() async {
+    _continuousMode = false;
+    _restartTimer?.cancel();
+    _timeoutTimer?.cancel();
+
+    if (_speech.isListening) {
+      await _speech.stop();
+    }
+
+    _setListeningState(ListeningState.idle);
+    _accessibility.finishSpeechInput();
+  }
+
+  /// Dinleme/durdurma geçişi
+  Future<void> toggleListening() async {
+    if (isListening) {
+      await stopListening();
+      await _accessibility.speakInfo(AppStrings.listeningStopped);
+    } else {
+      await startListening();
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SONUÇ İŞLEME
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _onResult(SpeechRecognitionResult result) {
+    if (!result.finalResult) return; // Sadece final sonuçları işle
+
+    final text = result.recognizedWords.toLowerCase().trim();
+    _accessibility.finishSpeechInput();
+    if (text.isEmpty) {
+      _setListeningState(ListeningState.idle);
+      return;
+    }
+    _setListeningState(ListeningState.processing);
+
+    // Fuzzy matching ile komut ara
+    final cmdResult = matchCommand(text);
+
+    if (cmdResult.recognized && cmdResult.command != null) {
+      _handleRecognizedCommand(cmdResult);
+    } else {
+      _handleUnrecognizedCommand(text);
+    }
+
+    // Sürekli modda tekrar dinlemeye başla
+    if (_continuousMode) {
+      _restartTimer?.cancel();
+      _restartTimer = Timer(_restartDelay, () {
+        if (_continuousMode) startListening();
+      });
+    } else {
+      _setListeningState(ListeningState.idle);
+    }
+  }
+
+  void _handleRecognizedCommand(CommandResult result) {
+    final cmd = result.command!;
+
+    // Haptic onay
+    _accessibility.mediumHaptic();
+
+    // Sesli onay
+    _accessibility.speak(
+      AppStrings.commandRecognized(cmd.displayName),
+      priority: TtsPriority.high,
+    );
+
+    // Callback
+    onCommandRecognized?.call(result);
+  }
+
+  void _handleUnrecognizedCommand(String text) {
+    _accessibility.speak(
+      AppStrings.commandNotRecognized,
+      priority: TtsPriority.normal,
+    );
+    _accessibility.lightHaptic();
+
+    // Callback (UI için)
+    onCommandRecognized?.call(CommandResult(rawText: text, recognized: false));
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FUZZY MATCHING
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Metin ile en iyi eşleşen komutu bulur (fuzzy matching)
+  CommandResult matchCommand(String input) {
+    final normalized = _normalize(input);
+    if (normalized.isEmpty) {
+      return CommandResult(rawText: input, recognized: false);
+    }
+
+    VoiceCommand? bestCommand;
+    double bestScore = 0;
+
+    for (final command in VoiceCommand.values) {
+      for (final alias in command.aliases) {
+        final normalizedAlias = _normalize(alias);
+
+        // 1. Tam eşleşme
+        if (normalized == normalizedAlias) {
+          return CommandResult(
+            command: command,
+            confidence: 1.0,
+            rawText: input,
+            recognized: true,
+          );
+        }
+
+        // 2. İçeriyor mu (substring)
+        if (normalized.contains(normalizedAlias) ||
+            normalizedAlias.contains(normalized)) {
+          const score = 0.85;
+          if (score > bestScore) {
+            bestScore = score;
+            bestCommand = command;
+          }
+          continue;
+        }
+
+        final inputWords = normalized.split(' ').toSet();
+        final aliasWords = normalizedAlias.split(' ').toSet();
+        if (aliasWords.length > 1 && inputWords.containsAll(aliasWords)) {
+          const score = 0.92;
+          if (score > bestScore) {
+            bestScore = score;
+            bestCommand = command;
+          }
+          continue;
+        }
+
+        // 3. Levenshtein mesafesi (fuzzy)
+        final distance = _levenshteinDistance(normalized, normalizedAlias);
+        final maxLen = max(normalized.length, normalizedAlias.length);
+        if (maxLen == 0) continue;
+
+        final similarity = 1.0 - (distance / maxLen);
+        if (similarity > bestScore && similarity >= _minConfidence) {
+          bestScore = similarity;
+          bestCommand = command;
+        }
+      }
+    }
+
+    if (bestCommand != null && bestScore >= _minConfidence) {
+      return CommandResult(
+        command: bestCommand,
+        confidence: bestScore,
+        rawText: input,
+        recognized: true,
+      );
+    }
+
+    return CommandResult(rawText: input, recognized: false);
+  }
+
+  /// Metni normalize eder — Türkçe karakterleri standartlaştırır
+  String _normalize(String text) {
+    return text
+        .toLowerCase()
+        .replaceAll('ç', 'c')
+        .replaceAll('ğ', 'g')
+        .replaceAll('ı', 'i')
+        .replaceAll('ö', 'o')
+        .replaceAll('ş', 's')
+        .replaceAll('ü', 'u')
+        .replaceAll('â', 'a')
+        .replaceAll('î', 'i')
+        .replaceAll('û', 'u')
+        .replaceAll(RegExp(r'[^\w\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  /// Levenshtein edit mesafesi — iki string arasındaki minimum düzenleme sayısı
+  int _levenshteinDistance(String s, String t) {
+    if (s.isEmpty) return t.length;
+    if (t.isEmpty) return s.length;
+
+    final sLen = s.length;
+    final tLen = t.length;
+    var previous = List.generate(tLen + 1, (i) => i);
+    var current = List.filled(tLen + 1, 0);
+
+    for (var i = 1; i <= sLen; i++) {
+      current[0] = i;
+      for (var j = 1; j <= tLen; j++) {
+        final cost = s[i - 1] == t[j - 1] ? 0 : 1;
+        current[j] = [
+          previous[j] + 1, // silme
+          current[j - 1] + 1, // ekleme
+          previous[j - 1] + cost, // değiştirme
+        ].reduce(min);
+      }
+      final temp = previous;
+      previous = current;
+      current = temp;
+    }
+
+    return previous[tLen];
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DURUM VE HATA
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _setListeningState(ListeningState state) {
+    _listeningState = state;
+    onListeningStateChanged?.call(state);
+  }
+
+  void _onStatus(String status) {
+    if (status == 'notListening' || status == 'done') {
+      _accessibility.finishSpeechInput();
+      if (!_continuousMode) _setListeningState(ListeningState.idle);
+    }
+    if (status == 'notListening' && _continuousMode) {
+      _restartTimer?.cancel();
+      _restartTimer = Timer(_restartDelay, () {
+        if (_continuousMode) startListening();
+      });
+    }
+  }
+
+  void _onError(SpeechRecognitionError error) {
+    if (shouldRetryWithoutOnDevice(
+      error.errorMsg,
+      preferOnDevice: _preferOnDevice,
+    )) {
+      _preferOnDevice = false;
+      unawaited(_listen());
+      return;
+    }
+    _accessibility.finishSpeechInput();
+    if (error.permanent) {
+      // Sebebi izne bağlamadan önce izni gerçekten kontrol et: izin verilmişken
+      // "izinleri kontrol edin" demek kullanıcıyı yanlış yere yönlendiriyordu.
+      unawaited(_announcePermanentFailure());
+      _setListeningState(ListeningState.idle);
+    } else if (_continuousMode) {
+      // Geçici hata — yeniden dene
+      _restartTimer?.cancel();
+      _restartTimer = Timer(_restartDelay, () {
+        if (_continuousMode) startListening();
+      });
+    }
+  }
+
+  /// Kalıcı tanıma hatasında doğru sebebi duyurur.
+  ///
+  /// İzin gerçekten reddedilmişse kullanıcıyı ayarlara yönlendirir; izin
+  /// varken motor çalışmıyorsa sorun cihazdadır ve kullanıcının yapabileceği
+  /// bir şey yoktur — bu durumda dokunmatik alternatife yönlendiririz.
+  Future<void> _announcePermanentFailure() async {
+    final granted = await Permission.microphone.isGranted;
+    if (!granted) {
+      await _accessibility.speakError(
+        'Mikrofon izni verilmediği için sesli komut kullanılamıyor. '
+        'Ayarlardan mikrofon iznini açabilirsiniz.',
+      );
+      return;
+    }
+    await _accessibility.speakError(
+      'Konuşma tanıma bu cihazda kullanılamıyor. '
+      'Dokunmatik veya klavye ile devam edebilirsiniz.',
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TEMİZLİK
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Kaynakları serbest bırakır
+  void dispose() {
+    _continuousMode = false;
+    _restartTimer?.cancel();
+    _timeoutTimer?.cancel();
+    if (_speech.isListening) {
+      _speech.stop();
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RIVERPOD PROVIDER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+final voiceCommandServiceProvider = Provider<VoiceCommandService>((ref) {
+  final accessibility = ref.read(accessibilityServiceProvider);
+  final service = VoiceCommandService(accessibility: accessibility);
+  ref.onDispose(() => service.dispose());
+  return service;
+});
