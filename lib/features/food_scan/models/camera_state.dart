@@ -87,9 +87,8 @@ class CameraState {
         analysis: clearAnalysis ? null : analysis ?? this.analysis,
         recognizedFood:
             clearAnalysis ? null : recognizedFood ?? this.recognizedFood,
-        recognizedFoodKey: clearAnalysis
-            ? null
-            : recognizedFoodKey ?? this.recognizedFoodKey,
+        recognizedFoodKey:
+            clearAnalysis ? null : recognizedFoodKey ?? this.recognizedFoodKey,
         calories: clearAnalysis ? null : calories ?? this.calories,
         confidence: clearAnalysis ? null : confidence ?? this.confidence,
         candidates: clearAnalysis ? const [] : candidates ?? this.candidates,
